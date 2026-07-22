@@ -1,0 +1,34 @@
+{
+  "command": "priorities-update",
+  "data": {
+    "priorities": [
+      {
+        "active": true,
+        "componentId": "COLOR",
+        "origin": "Fixture Capture@::ffff:172.17.0.1",
+        "priority": 128,
+        "value": {
+          "HSL": [
+            0,
+            1,
+            0.5
+          ],
+          "RGB": [
+            255,
+            0,
+            0
+          ]
+        },
+        "visible": true
+      },
+      {
+        "active": false,
+        "componentId": "VIDEOGRABBER",
+        "origin": "System",
+        "priority": 240,
+        "visible": false
+      }
+    ],
+    "priorities_autoselect": true
+  }
+}

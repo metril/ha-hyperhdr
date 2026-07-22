@@ -1,0 +1,59 @@
+{
+  "command": "adjustment-update",
+  "data": [
+    {
+      "backlightColored": true,
+      "backlightThreshold": 0.0039,
+      "black": [
+        0,
+        0,
+        0
+      ],
+      "blue": [
+        0,
+        0,
+        255
+      ],
+      "classic_config": true,
+      "cyan": [
+        0,
+        255,
+        255
+      ],
+      "gamma": 1.5,
+      "green": [
+        0,
+        255,
+        0
+      ],
+      "luminanceGain": 0.8,
+      "magenta": [
+        255,
+        0,
+        255
+      ],
+      "powerLimit": 1,
+      "red": [
+        255,
+        0,
+        0
+      ],
+      "saturationGain": 1,
+      "scaleOutput": 1,
+      "temperatureBlue": 1,
+      "temperatureGreen": 1,
+      "temperatureRed": 1,
+      "temperatureSetting": "disabled",
+      "white": [
+        255,
+        255,
+        255
+      ],
+      "yellow": [
+        255,
+        255,
+        0
+      ]
+    }
+  ]
+}

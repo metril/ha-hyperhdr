@@ -1,0 +1,32 @@
+{
+  "command": "sysinfo",
+  "info": {
+    "hyperhdr": {
+      "build": "(HEAD detached at v22.0.0.0beta2) (Awawa-c1aaa4a/a6fa8a2-1778238667)",
+      "gitremote": "https://github.com/awawa-dev/HyperHDR",
+      "id": "a70b962d-06b8-5d92-81f9-726384e30124",
+      "readOnlyMode": false,
+      "time": "May  8 2026 13:08:48",
+      "version": "22.0.0beta2"
+    },
+    "system": {
+      "architecture": "x86_64",
+      "cpuHardware": "",
+      "cpuModelName": "Intel(R) Core(TM) i7-8809G CPU @ 3.10GHz",
+      "cpuModelType": "158",
+      "cpuRevision": "",
+      "domainName": "olympos.net",
+      "hostName": "a07b20766d71",
+      "kernelType": "linux",
+      "kernelVersion": "7.0.11-76070011-generic",
+      "openssl": "OpenSSL 1.1.1w  11 Sep 2023",
+      "prettyName": "Ubuntu 24.04.4 LTS",
+      "productType": "ubuntu",
+      "productVersion": "24.04",
+      "qtVersion": "6.8.3",
+      "wordSize": "64"
+    }
+  },
+  "success": true,
+  "tan": 1
+}

@@ -1,0 +1,7 @@
+{
+  "command": "components-update",
+  "data": {
+    "enabled": true,
+    "name": "HDR"
+  }
+}

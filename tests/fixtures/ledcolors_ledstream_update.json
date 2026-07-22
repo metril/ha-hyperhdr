@@ -1,0 +1,12 @@
+{
+  "command": "ledcolors-ledstream-update",
+  "result": {
+    "leds": [
+      0,
+      255,
+      0
+    ]
+  },
+  "success": true,
+  "tan": 31
+}

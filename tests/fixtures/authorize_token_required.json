@@ -1,0 +1,8 @@
+{
+  "command": "authorize-tokenRequired",
+  "info": {
+    "required": false
+  },
+  "success": true,
+  "tan": 3
+}

@@ -1,0 +1,7 @@
+{
+  "command": "components-update",
+  "data": {
+    "enabled": false,
+    "name": "SMOOTHING"
+  }
+}

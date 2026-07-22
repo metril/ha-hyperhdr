@@ -1,0 +1,15 @@
+{
+  "command": "instance-update",
+  "data": [
+    {
+      "friendly_name": "First LED instance",
+      "instance": 0,
+      "running": true
+    },
+    {
+      "friendly_name": "Test Instance",
+      "instance": 1,
+      "running": false
+    }
+  ]
+}

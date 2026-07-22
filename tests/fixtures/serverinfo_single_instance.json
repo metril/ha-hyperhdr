@@ -1,0 +1,481 @@
+{
+  "command": "serverinfo",
+  "info": {
+    "activeEffects": [],
+    "activeLedColor": [],
+    "adjustment": [
+      {
+        "backlightColored": true,
+        "backlightThreshold": 0.0039,
+        "black": [
+          0,
+          0,
+          0
+        ],
+        "blue": [
+          0,
+          0,
+          255
+        ],
+        "classic_config": true,
+        "cyan": [
+          0,
+          255,
+          255
+        ],
+        "gamma": 1.5,
+        "green": [
+          0,
+          255,
+          0
+        ],
+        "luminanceGain": 1,
+        "magenta": [
+          255,
+          0,
+          255
+        ],
+        "powerLimit": 1,
+        "red": [
+          255,
+          0,
+          0
+        ],
+        "saturationGain": 1,
+        "scaleOutput": 1,
+        "temperatureBlue": 1,
+        "temperatureGreen": 1,
+        "temperatureRed": 1,
+        "temperatureSetting": "disabled",
+        "white": [
+          255,
+          255,
+          255
+        ],
+        "yellow": [
+          255,
+          255,
+          0
+        ]
+      }
+    ],
+    "components": [
+      {
+        "enabled": true,
+        "name": "ALL"
+      },
+      {
+        "enabled": false,
+        "name": "HDR"
+      },
+      {
+        "enabled": true,
+        "name": "SMOOTHING"
+      },
+      {
+        "enabled": false,
+        "name": "BLACKBORDER"
+      },
+      {
+        "enabled": false,
+        "name": "FORWARDER"
+      },
+      {
+        "enabled": true,
+        "name": "VIDEOGRABBER"
+      },
+      {
+        "enabled": false,
+        "name": "SYSTEMGRABBER"
+      },
+      {
+        "enabled": false,
+        "name": "LEDDEVICE"
+      }
+    ],
+    "currentInstance": 0,
+    "effects": [
+      {
+        "name": "Music: fullscreen pulse (BLUE)"
+      },
+      {
+        "name": "Music: fullscreen pulse (GREEN)"
+      },
+      {
+        "name": "Music: fullscreen pulse (MULTI COLOR)"
+      },
+      {
+        "name": "Music: fullscreen pulse (MULTI COLOR FAST)"
+      },
+      {
+        "name": "Music: fullscreen pulse (MULTI COLOR SLOW)"
+      },
+      {
+        "name": "Music: fullscreen pulse (RED)"
+      },
+      {
+        "name": "Music: fullscreen pulse (WHITE)"
+      },
+      {
+        "name": "Music: fullscreen pulse (YELLOW)"
+      },
+      {
+        "name": "Music: quatro for LED strip (BLUE)"
+      },
+      {
+        "name": "Music: quatro for LED strip (GREEN)"
+      },
+      {
+        "name": "Music: quatro for LED strip (MULTI COLOR)"
+      },
+      {
+        "name": "Music: quatro for LED strip (MULTI COLOR FAST)"
+      },
+      {
+        "name": "Music: quatro for LED strip (MULTI COLOR SLOW)"
+      },
+      {
+        "name": "Music: quatro for LED strip (RED)"
+      },
+      {
+        "name": "Music: quatro for LED strip (WHITE)"
+      },
+      {
+        "name": "Music: quatro for LED strip (YELLOW)"
+      },
+      {
+        "name": "Music: stereo for LED strip (BLUE)"
+      },
+      {
+        "name": "Music: stereo for LED strip (GREEN)"
+      },
+      {
+        "name": "Music: stereo for LED strip (MULTI COLOR)"
+      },
+      {
+        "name": "Music: stereo for LED strip (MULTI COLOR FAST)"
+      },
+      {
+        "name": "Music: stereo for LED strip (MULTI COLOR SLOW)"
+      },
+      {
+        "name": "Music: stereo for LED strip (RED)"
+      },
+      {
+        "name": "Music: stereo for LED strip (WHITE)"
+      },
+      {
+        "name": "Music: stereo for LED strip (YELLOW)"
+      },
+      {
+        "name": "Music: equalizer test (turn on video preview)"
+      },
+      {
+        "name": "Music: pulse waves for LED strip (MULTI COLOR)"
+      },
+      {
+        "name": "Music: pulse waves for LED strip (MULTI COLOR FAST)"
+      },
+      {
+        "name": "Music: pulse waves for LED strip (MULTI COLOR SLOW)"
+      },
+      {
+        "name": "Atomic swirl"
+      },
+      {
+        "name": "Blue mood blobs"
+      },
+      {
+        "name": "Breath"
+      },
+      {
+        "name": "Candle"
+      },
+      {
+        "name": "Cinema brighten lights"
+      },
+      {
+        "name": "Cinema dim lights"
+      },
+      {
+        "name": "Cold mood blobs"
+      },
+      {
+        "name": "Double swirl"
+      },
+      {
+        "name": "Full color mood blobs"
+      },
+      {
+        "name": "Green mood blobs"
+      },
+      {
+        "name": "Knight rider"
+      },
+      {
+        "name": "Notify blue"
+      },
+      {
+        "name": "Plasma"
+      },
+      {
+        "name": "Police Lights Single"
+      },
+      {
+        "name": "Police Lights Solid"
+      },
+      {
+        "name": "Rainbow swirl"
+      },
+      {
+        "name": "Rainbow waves"
+      },
+      {
+        "name": "Red mood blobs"
+      },
+      {
+        "name": "Sea waves"
+      },
+      {
+        "name": "Sparks"
+      },
+      {
+        "name": "Strobe red"
+      },
+      {
+        "name": "Strobe white"
+      },
+      {
+        "name": "Rainbow swirl fast"
+      },
+      {
+        "name": "System Shutdown"
+      },
+      {
+        "name": "Warm mood blobs"
+      },
+      {
+        "name": "Waves with Color"
+      }
+    ],
+    "grabbers": {
+      "active": "V4L2:auto",
+      "available": [
+        "Video capturing (V4L2)"
+      ],
+      "current": {
+        "device": "",
+        "videoMode": ""
+      },
+      "lut_for_hdr_exists": 0,
+      "lut_for_hdr_path": "/root/.config/HyperHDR/lut_lin_tables.3d",
+      "video_devices": []
+    },
+    "hasCEC": 0,
+    "hasPROTOBUF": 1,
+    "hostname": "a07b20766d71",
+    "imageToLedMappingType": "advanced",
+    "instance": [
+      {
+        "friendly_name": "First LED instance",
+        "instance": 0,
+        "running": true
+      }
+    ],
+    "lastError": "2026-07-22 02:28:02 [LOGGER] COULD NOT REGISTER THE SLEEP HANDLER: [org.freedesktop.DBus.Error.FileNotFound] Failed to open bus (No such file or directory)",
+    "ledDevices": {
+      "available": [
+        {
+          "group": "leds_group_2_network",
+          "name": "atmoorb"
+        },
+        {
+          "group": "leds_group_2_network",
+          "name": "cololight"
+        },
+        {
+          "group": "leds_group_2_network",
+          "name": "ddp"
+        },
+        {
+          "group": "leds_group_2_network",
+          "name": "fadecandy"
+        },
+        {
+          "group": "leds_group_2_network",
+          "name": "home_assistant"
+        },
+        {
+          "group": "leds_group_2_network",
+          "name": "hyperk"
+        },
+        {
+          "group": "leds_group_2_network",
+          "name": "lifx"
+        },
+        {
+          "group": "leds_group_2_network",
+          "name": "nanoleaf"
+        },
+        {
+          "group": "leds_group_2_network",
+          "name": "philipshue"
+        },
+        {
+          "group": "leds_group_2_network",
+          "name": "tpm2net"
+        },
+        {
+          "group": "leds_group_2_network",
+          "name": "udpartnet"
+        },
+        {
+          "group": "leds_group_2_network",
+          "name": "udpe131"
+        },
+        {
+          "group": "leds_group_2_network",
+          "name": "udph801"
+        },
+        {
+          "group": "leds_group_2_network",
+          "name": "udpraw"
+        },
+        {
+          "group": "leds_group_2_network",
+          "name": "wiz"
+        },
+        {
+          "group": "leds_group_2_network",
+          "name": "wled"
+        },
+        {
+          "group": "leds_group_2_network",
+          "name": "yeelight"
+        },
+        {
+          "group": "leds_group_2_network",
+          "name": "zigbee2mqtt"
+        },
+        {
+          "group": "leds_group_5_debug",
+          "name": "file"
+        },
+        {
+          "group": "leds_group_3_serial",
+          "name": "adalight"
+        },
+        {
+          "group": "leds_group_3_serial",
+          "name": "atmo"
+        },
+        {
+          "group": "leds_group_3_serial",
+          "name": "dmx"
+        },
+        {
+          "group": "leds_group_3_serial",
+          "name": "karate"
+        },
+        {
+          "group": "leds_group_3_serial",
+          "name": "sedu"
+        },
+        {
+          "group": "leds_group_3_serial",
+          "name": "skydimo"
+        },
+        {
+          "group": "leds_group_3_serial",
+          "name": "tpm2"
+        },
+        {
+          "group": "leds_group_0_SPI",
+          "name": "apa102"
+        },
+        {
+          "group": "leds_group_0_SPI",
+          "name": "apa104"
+        },
+        {
+          "group": "leds_group_0_SPI",
+          "name": "hd108"
+        },
+        {
+          "group": "leds_group_0_SPI",
+          "name": "hyperspi"
+        },
+        {
+          "group": "leds_group_0_SPI",
+          "name": "lpd6803"
+        },
+        {
+          "group": "leds_group_0_SPI",
+          "name": "lpd8806"
+        },
+        {
+          "group": "leds_group_0_SPI",
+          "name": "p9813"
+        },
+        {
+          "group": "leds_group_0_SPI",
+          "name": "sk9822"
+        },
+        {
+          "group": "leds_group_0_SPI",
+          "name": "sk6812spi"
+        },
+        {
+          "group": "leds_group_0_SPI",
+          "name": "sk6822spi"
+        },
+        {
+          "group": "leds_group_0_SPI",
+          "name": "ws2801"
+        },
+        {
+          "group": "leds_group_0_SPI",
+          "name": "ws2812spi"
+        },
+        {
+          "group": "leds_group_1_PWM",
+          "name": "rpi_pio"
+        },
+        {
+          "group": "leds_group_1_PWM",
+          "name": "piblaster"
+        }
+      ]
+    },
+    "leds": [
+      {
+        "group": 0,
+        "hmax": 1,
+        "hmin": 0,
+        "vmax": 0.08,
+        "vmin": 0
+      }
+    ],
+    "priorities": [
+      {
+        "active": false,
+        "componentId": "VIDEOGRABBER",
+        "origin": "System",
+        "priority": 240,
+        "visible": false
+      }
+    ],
+    "priorities_autoselect": true,
+    "sessions": [],
+    "sound": {
+      "active": false,
+      "device": "",
+      "sound_available": [
+        "null | Discard all samples (playback) or generate zero samples (capture) | "
+      ]
+    },
+    "videomodehdr": 0
+  },
+  "success": true,
+  "tan": 2
+}
