@@ -94,6 +94,23 @@ class TestAsyncSetupEntryHappyPath:
         push_cb({"data": [{"instance": 0, "friendly_name": "First", "running": True}]})
         await hass.async_block_till_done()  # must not raise
 
+    async def test_purges_stale_first_instance_running_switch_registry_entry(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Releases <= 0.1.1 created a Running switch for instance 0, which
+        HyperHDR forbids ever stopping -- setup must drop the dead registry
+        entry those installs left behind, and nothing else."""
+        hass = FakeHass()
+        entry = _entry()
+        _patch_server_client(monkeypatch)
+        hass.entity_registry.add("switch.first_running", "srv-uid_0_running", "entry1")
+        hass.entity_registry.add("switch.second_running", "srv-uid_1_running", "entry1")
+
+        await hyperhdr.async_setup_entry(hass, entry)  # type: ignore[arg-type]
+
+        assert hass.entity_registry.removed == ["switch.first_running"]
+        assert "switch.second_running" in hass.entity_registry.entities
+
     async def test_default_priority_and_hidden_effects_come_from_options(self, monkeypatch: pytest.MonkeyPatch) -> None:
         hass = FakeHass()
         entry = _entry()

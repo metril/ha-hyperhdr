@@ -3,14 +3,22 @@
 Two switch kinds, both built dynamically rather than as a fixed list:
 
 - One component switch per entry in ``data.components`` (CONFIG category --
-  full control over every reported component, including ``ALL`` and
-  ``LEDDEVICE``, which mirrors the light's own power state). Added on
-  ``SIGNAL_INSTANCE_READY`` like every other data-driven entity.
-- One "running" switch per *roster* instance (no entity_category). Unlike
-  every other entity in this integration it does NOT need an instance
-  coordinator to exist yet -- its state/commands are server-scoped (the
-  roster + start/stop), so it's added on ``SIGNAL_INSTANCE_ADDED`` instead,
-  which fires for a freshly created instance even before it's ever started.
+  full control over every reported component). Added on
+  ``SIGNAL_INSTANCE_READY`` like every other data-driven entity. Two
+  components deserve a note: ``LEDDEVICE`` is the same component the light
+  entity's on/off drives (the two mirror each other), and ``ALL`` is
+  server-GLOBAL -- HyperHDR routes it to ``toggleStateAllInstances``, which
+  pauses/resumes every running instance, hence its "All instances (global)"
+  label (HyperHDR's own web-UI wording).
+- One "running" switch per *roster* instance (no entity_category) -- except
+  instance ``FIRST_INSTANCE_ID``, which never gets one: HyperHDR forbids
+  stopping/deleting instance 0 (``isInstAllowed`` is ``inst > 0``) and acks
+  its ``stopInstance`` as a silent no-op success, so the switch could never
+  work in either direction there. Unlike every other entity in this
+  integration it does NOT need an instance coordinator to exist yet -- its
+  state/commands are server-scoped (the roster + start/stop), so it's added
+  on ``SIGNAL_INSTANCE_ADDED`` instead, which fires for a freshly created
+  instance even before it's ever started.
 """
 
 from __future__ import annotations
@@ -23,7 +31,13 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import EntityCategory
 
-from .const import COMPONENT_LABELS, SIGNAL_INSTANCE_ADDED, SIGNAL_INSTANCE_READY
+from .const import (
+    COMPONENT_ICONS,
+    COMPONENT_LABELS,
+    FIRST_INSTANCE_ID,
+    SIGNAL_INSTANCE_ADDED,
+    SIGNAL_INSTANCE_READY,
+)
 from .entity import (
     HyperHdrInstanceEntity,
     HyperHdrServerEntity,
@@ -59,6 +73,7 @@ async def async_setup_entry(
         entities.extend(
             HyperHdrRunningSwitch(runtime.server_coordinator, entry, instance_id)
             for instance_id in server_data.instances
+            if instance_id != FIRST_INSTANCE_ID
         )
     async_add_entities(entities)
 
@@ -67,6 +82,8 @@ async def async_setup_entry(
         async_add_entities(await _component_entities_for_instance(entry, coordinator, instance_id))
 
     async def _add_running_for_instance(instance_id: int) -> None:
+        if instance_id == FIRST_INSTANCE_ID:
+            return
         async_add_entities([HyperHdrRunningSwitch(runtime.server_coordinator, entry, instance_id)])
 
     entry.async_on_unload(
@@ -109,6 +126,7 @@ class HyperHdrComponentSwitch(HyperHdrInstanceEntity, SwitchEntity):
         super().__init__(coordinator, entry, instance_id, f"component_{component_name.lower()}")
         self._component_name = component_name
         self._attr_name = COMPONENT_LABELS.get(component_name, component_name.title())
+        self._attr_icon = COMPONENT_ICONS.get(component_name)
 
     @property
     def is_on(self) -> bool:
@@ -138,10 +156,12 @@ class HyperHdrRunningSwitch(HyperHdrServerEntity, SwitchEntity):
     Server-scoped (state comes from the roster on ``HyperHdrServerCoordinator``
     -- a created-but-not-started instance has no ``HyperHdrInstanceCoordinator``
     at all yet) but grouped onto the instance's own device via
-    ``instance_device_info``.
+    ``instance_device_info``. Never built for ``FIRST_INSTANCE_ID`` -- see the
+    module docstring.
     """
 
     _attr_name = "Running"
+    _attr_icon = "mdi:play-circle-outline"
 
     def __init__(self, coordinator: HyperHdrServerCoordinator, entry: HyperHdrConfigEntry, instance_id: int) -> None:
         """Initialize the running switch."""

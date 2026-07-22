@@ -34,6 +34,7 @@ from .const import (
     DEFAULT_REQUEST_TIMEOUT,
     DEFAULT_STALE_TIMEOUT,
     DOMAIN,
+    FIRST_INSTANCE_ID,
     INSTANCE_UPDATE_TOPIC,
     OPT_DEFAULT_PRIORITY,
     OPT_HEARTBEAT,
@@ -257,6 +258,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: HyperHdrConfigEntry) -> 
     dr.async_get(hass).async_get_or_create(
         config_entry_id=entry.entry_id, **server_device_info(server_coordinator, entry)
     )
+
+    # Cleanup for installs that predate FIRST_INSTANCE_ID handling: releases
+    # <= 0.1.1 created a "Running" switch for instance 0, which HyperHDR
+    # forbids ever stopping (see const.FIRST_INSTANCE_ID) -- switch.py no
+    # longer builds it, so drop the dead registry entry it left behind.
+    stale_running_uid = f"{server_uid(entry)}_{FIRST_INSTANCE_ID}_running"
+    entity_registry = er.async_get(hass)
+    for entity_entry in er.async_entries_for_config_entry(entity_registry, entry.entry_id):
+        if entity_entry.unique_id == stale_running_uid:
+            entity_registry.async_remove(entity_entry.entity_id)
 
     # Held for the whole initial-instance startup burst below, not just a
     # single call -- the same lock a later push-triggered reconciliation

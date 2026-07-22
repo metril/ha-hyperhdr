@@ -67,6 +67,13 @@ SUBSCRIPTIONS = (
 )
 SERVER_SUBSCRIPTIONS = ("instance-update",)
 
+# The permanent first instance. HyperHDR's HyperHdrManager::isInstAllowed
+# is `inst > 0`: instance 0 can never be stopped or deleted, and the JSON
+# API acks its stopInstance as a success without doing anything (a literal
+# "silent fail" in HyperAPI.cpp) -- so a start/stop switch for it can never
+# function in either direction.
+FIRST_INSTANCE_ID = 0
+
 # Component ids.
 COMPONENT_ALL = "ALL"
 COMPONENT_LEDDEVICE = "LEDDEVICE"
@@ -75,8 +82,14 @@ COMPONENT_HDR = "HDR"
 # Known v22 component ids mapped to friendly labels. Component switches are
 # built dynamically from serverinfo; this map only provides labels/icons for
 # known ids.
+#
+# "ALL" is deliberately labeled with HyperHDR's own web-UI wording
+# (i18n key general_comp_ALL): setting it routes to
+# HyperHdrManager::toggleStateAllInstances, which pauses/resumes EVERY
+# running instance on the server -- it is not a per-instance toggle, even
+# though its enabled state is reported per instance.
 COMPONENT_LABELS: dict[str, str] = {
-    "ALL": "LED output",
+    "ALL": "All instances (global)",
     "HDR": "HDR tone mapping",
     "SMOOTHING": "Smoothing",
     "BLACKBORDER": "Blackborder detection",
@@ -84,6 +97,19 @@ COMPONENT_LABELS: dict[str, str] = {
     "VIDEOGRABBER": "USB capture",
     "SYSTEMGRABBER": "Screen capture",
     "LEDDEVICE": "LED device",
+}
+
+# Distinct device-page icons for known component ids (unknown ids keep the
+# switch domain's default icon).
+COMPONENT_ICONS: dict[str, str] = {
+    "ALL": "mdi:power",
+    "HDR": "mdi:hdr",
+    "SMOOTHING": "mdi:chart-bell-curve-cumulative",
+    "BLACKBORDER": "mdi:crop",
+    "FORWARDER": "mdi:share-variant",
+    "VIDEOGRABBER": "mdi:usb",
+    "SYSTEMGRABBER": "mdi:monitor-screenshot",
+    "LEDDEVICE": "mdi:led-strip-variant",
 }
 
 HDR_MODE_OFF = 0

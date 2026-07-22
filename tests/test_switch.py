@@ -9,6 +9,7 @@ import pytest
 from conftest import FakeConfigEntry, FakeDomainClient, FakeHass
 from homeassistant.exceptions import HomeAssistantError
 
+from custom_components.hyperhdr.const import SIGNAL_INSTANCE_ADDED
 from custom_components.hyperhdr.coordinator import (
     HyperHdrInstanceCoordinator,
     HyperHdrRuntimeData,
@@ -23,7 +24,11 @@ from custom_components.hyperhdr.models import (
     HyperHdrServerData,
     HyperHdrSysInfo,
 )
-from custom_components.hyperhdr.switch import HyperHdrRunningSwitch, _component_entities_for_instance
+from custom_components.hyperhdr.switch import (
+    HyperHdrRunningSwitch,
+    _component_entities_for_instance,
+    async_setup_entry,
+)
 
 
 def _adjustment() -> HyperHdrAdjustment:
@@ -114,8 +119,27 @@ class TestComponentSwitchDynamicBuild:
             )
         )
         entities = {e._component_name: e for e in await _component_entities_for_instance(entry, coordinator, 1)}
-        assert entities["ALL"]._attr_name == "LED output"
+        # "All instances (global)" is HyperHDR's own web-UI label for ALL --
+        # setting it pauses/resumes every instance on the server, so the name
+        # must state that scope.
+        assert entities["ALL"]._attr_name == "All instances (global)"
         assert entities["CUSTOMTHING"]._attr_name == "Customthing"
+
+    async def test_icons_from_component_icons_with_no_icon_fallback(self) -> None:
+        entry, _server, coordinator, _client = _make_setup()
+        coordinator.async_set_updated_data(
+            _instance_data(
+                {
+                    "ALL": HyperHdrComponent(name="ALL", enabled=True),
+                    "LEDDEVICE": HyperHdrComponent(name="LEDDEVICE", enabled=True),
+                    "CUSTOMTHING": HyperHdrComponent(name="CUSTOMTHING", enabled=True),
+                }
+            )
+        )
+        entities = {e._component_name: e for e in await _component_entities_for_instance(entry, coordinator, 1)}
+        assert entities["ALL"]._attr_icon == "mdi:power"
+        assert entities["LEDDEVICE"]._attr_icon == "mdi:led-strip-variant"
+        assert entities["CUSTOMTHING"]._attr_icon is None
 
     async def test_empty_components_creates_nothing(self) -> None:
         entry, _server, coordinator, _client = _make_setup()
@@ -244,3 +268,62 @@ class TestRunningSwitch:
         entry, server_coordinator, _coordinator, _client = _make_setup()
         switch = HyperHdrRunningSwitch(server_coordinator, entry, 1)
         assert switch._attr_device_info["identifiers"] == {("hyperhdr", "srv-uid_1")}
+
+
+def _make_entry_for_setup(hass: FakeHass, instances: dict[int, HyperHdrInstanceSummary]) -> FakeConfigEntry:
+    entry = FakeConfigEntry(entry_id="entry1", unique_id="srv-uid", data={"host": "10.0.0.5", "port": 8090})
+    server_coordinator = HyperHdrServerCoordinator(hass, entry, object())  # type: ignore[arg-type]
+    server_coordinator.async_set_updated_data(
+        HyperHdrServerData(
+            sysinfo=HyperHdrSysInfo(id="dev", hostname="host", version="22", build="b"),
+            instances=instances,
+            connected=True,
+        )
+    )
+    entry.runtime_data = HyperHdrRuntimeData(  # type: ignore[attr-defined]
+        server_client=FakeDomainClient(),  # type: ignore[arg-type]
+        server_coordinator=server_coordinator,
+        # Deliberately empty -- these tests exercise only the running-switch
+        # paths; a coordinator here would make async_setup_entry bounded-wait
+        # on component data.
+        instance_coordinators={},
+        default_priority=128,
+        hidden_effects=set(),
+    )
+    return entry
+
+
+class TestRunningSwitchNeverBuiltForFirstInstance:
+    """HyperHDR forbids stopping/deleting instance 0 (isInstAllowed is
+    ``inst > 0``) and acks its stopInstance as a silent no-op success, so a
+    Running switch for it can never work in either direction -- both add
+    paths must skip it."""
+
+    async def test_initial_setup_skips_instance_zero(self) -> None:
+        hass = FakeHass()
+        entry = _make_entry_for_setup(
+            hass,
+            instances={
+                0: HyperHdrInstanceSummary(instance=0, friendly_name="First", running=True),
+                1: HyperHdrInstanceSummary(instance=1, friendly_name="Second", running=True),
+            },
+        )
+        added: list[HyperHdrRunningSwitch] = []
+        await async_setup_entry(hass, entry, lambda new: added.extend(new))  # type: ignore[arg-type]
+        assert [switch._instance_id for switch in added] == [1]
+
+    async def test_dispatcher_add_skips_instance_zero(self) -> None:
+        hass = FakeHass()
+        entry = _make_entry_for_setup(
+            hass,
+            instances={0: HyperHdrInstanceSummary(instance=0, friendly_name="First", running=True)},
+        )
+        added: list[HyperHdrRunningSwitch] = []
+        await async_setup_entry(hass, entry, lambda new: added.extend(new))  # type: ignore[arg-type]
+        assert added == []
+
+        listener = hass.dispatcher_listeners[f"{SIGNAL_INSTANCE_ADDED}_{entry.entry_id}"][0]
+        await listener(0)
+        assert added == []
+        await listener(2)
+        assert [switch._instance_id for switch in added] == [2]

@@ -12,13 +12,13 @@ A zero-dependency, push-based Home Assistant integration for [HyperHDR](https://
 ## Features
 
 - **Light** — one light entity per instance with RGB color, brightness (via `luminanceGain`), and effect selection (plus a `Solid` pseudo-effect for a plain color)
-- **Component switches** — one switch per HyperHDR component reported by the server (LED output, HDR, smoothing, blackborder detection, forwarder, USB/screen capture, LED device, ...), built dynamically from live data
+- **Component switches** — one switch per HyperHDR component reported by the server (HDR, smoothing, blackborder detection, forwarder, USB/screen capture, LED device, ...), built dynamically from live data. Two deserve a note: **LED device** is the same setting the light entity's on/off drives (the two always mirror each other), and **All instances (global)** — HyperHDR's own name for its `ALL` component — pauses/resumes *every* instance on the server, not just the device it appears on
 - **HDR tone mapping select** — toggle HyperHDR's HDR tone mapping on/off
 - **Priority source select** — pin the visible priority to a specific source, or set it back to auto-select
 - **Adjustment numbers** — luminance gain, saturation gain, gamma, backlight threshold, and per-channel (R/G/B) temperature, one entity per field actually present on the connected instance
 - **Sensors** — visible priority (with owner/RGB/component attributes), LED count, video mode, and server version
 - **Clear priority button** — clears this integration's own priority on an instance
-- **Instance running switch** — start/stop a HyperHDR instance (works without admin credentials on v22)
+- **Instance running switch** — start/stop a HyperHDR instance (works without admin credentials on v22). Created only for instances 1 and up: HyperHDR's first instance (id 0) is always running by design — the server refuses to stop or delete it, so a switch there could never do anything
 - **Dynamic multi-instance devices** — every HyperHDR instance shows up as its own Home Assistant device, created the first time it's observed running and cleanly removed (device, entities, and all) if it's later deleted from the server — all live, with no HA restart required
 - **LED preview camera** — a per-instance camera showing the live, to-scale LED layout rendered from the LED-color stream (the in-HA counterpart of HyperHDR's own dashboard visualization); **disabled by default** (enable it in the entity's settings if you want it — see [Known limitations](#known-limitations))
 - **Authentication** — optional API token and optional admin password, with full reauth support when credentials go stale
@@ -76,8 +76,8 @@ If your HyperHDR server sits behind a reverse proxy (Traefik, nginx, etc.):
 | Platform | Entity | Notes |
 |----------|--------|-------|
 | Light | *(instance device name)* | Primary light entity; RGB + brightness + effect list |
-| Switch | *Component* (e.g. LED output, HDR tone mapping, Smoothing, ...) | One per reported component; CONFIG category |
-| Switch | Running | Start/stop the instance; lives on the instance device but is server-scoped |
+| Switch | *Component* (e.g. LED device, HDR tone mapping, Smoothing, ...) | One per reported component; CONFIG category. "All instances (global)" pauses/resumes every instance on the server |
+| Switch | Running | Start/stop the instance; lives on the instance device but is server-scoped. Not created for instance 0 (HyperHDR's first instance can never be stopped) |
 | Select | HDR tone mapping | On/off; CONFIG category |
 | Select | Priority source | Auto or a specific active priority |
 | Number | Luminance gain, Saturation gain, Gamma, Backlight threshold, Temperature red/green/blue | Only created for fields the connected instance actually reports; CONFIG category |
