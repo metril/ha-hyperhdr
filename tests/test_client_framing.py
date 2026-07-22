@@ -402,9 +402,74 @@ class TestLedstreamRefcounting:
         await client.start_ledstream(frames.append)
         assert len(ws.sent) == sent_before_second  # second consumer: no new send
 
-        # A pushed frame is routed to the registered callback.
+        # A pushed frame is fanned out once per registered consumer -- both
+        # calls above registered (the same) `frames.append`, so it's invoked
+        # twice; see test_ledstream_frame_fans_out_to_every_registered_consumer
+        # below for the realistic two-distinct-consumers case.
         ws.push(ledstream_update_frame(sent["tan"]))
-        await wait_until(lambda: len(frames) == 1)
+        await wait_until(lambda: len(frames) == 2)
+
+    async def test_ledstream_frame_fans_out_to_every_registered_consumer(
+        self, connected_instance: tuple[HyperHdrInstanceClient, FakeWebSocket]
+    ) -> None:
+        """The directed fix: two concurrent consumers (e.g. camera.py's LED
+        preview AND gradient cameras of the same instance) must each get
+        every frame -- neither starves the other."""
+        client, ws = connected_instance
+        frames_a: list[dict[str, Any]] = []
+        frames_b: list[dict[str, Any]] = []
+
+        before = len(ws.sent)
+        task1 = asyncio.ensure_future(client.start_ledstream(frames_a.append))
+        sent = await _wait_and_ack(ws, before)
+        await task1
+        assert sent["subcommand"] == "ledstream-start"
+
+        sent_before_second = len(ws.sent)
+        await client.start_ledstream(frames_b.append)
+        assert len(ws.sent) == sent_before_second  # second consumer: no new send
+
+        ws.push(ledstream_update_frame(sent["tan"]))
+        await wait_until(lambda: len(frames_a) == 1 and len(frames_b) == 1)
+        assert frames_a[0] == frames_b[0]
+
+    async def test_stop_ledstream_removes_only_that_consumer_the_other_keeps_streaming(
+        self, connected_instance: tuple[HyperHdrInstanceClient, FakeWebSocket]
+    ) -> None:
+        """Removing one of two consumers must not stop (or otherwise
+        interrupt) frames still being delivered to the other."""
+        client, ws = connected_instance
+        frames_a: list[dict[str, Any]] = []
+        frames_b: list[dict[str, Any]] = []
+
+        before = len(ws.sent)
+        task1 = asyncio.ensure_future(client.start_ledstream(frames_a.append))
+        sent = await _wait_and_ack(ws, before)
+        await task1
+        await client.start_ledstream(frames_b.append)
+
+        sent_before_stop = len(ws.sent)
+        await client.stop_ledstream(frames_a.append)
+        assert len(ws.sent) == sent_before_stop  # one consumer remains: no stop sent
+
+        ws.push(ledstream_update_frame(sent["tan"]))
+        await wait_until(lambda: len(frames_b) == 1)
+        assert len(frames_a) == 0  # the removed consumer gets nothing further
+
+        # Stopping the last consumer now sends the real stop, and a further
+        # frame reaches neither consumer.
+        task2 = asyncio.ensure_future(client.stop_ledstream(frames_b.append))
+        stop_sent = await _wait_and_ack(ws, sent_before_stop)
+        await task2
+        assert stop_sent["subcommand"] == "ledstream-stop"
+
+        ws.push(ledstream_update_frame(stop_sent["tan"]))
+        sent_before_probe = len(ws.sent)
+        probe_task = asyncio.ensure_future(client.async_clear(-1))
+        await _wait_and_ack(ws, sent_before_probe)
+        await probe_task
+        assert len(frames_a) == 0
+        assert len(frames_b) == 1
 
     async def test_stop_ledstream_only_sends_stop_at_refcount_zero(
         self, connected_instance: tuple[HyperHdrInstanceClient, FakeWebSocket]
@@ -463,7 +528,7 @@ class TestLedstreamRefcounting:
             await client.start_ledstream(lambda data: None)
 
         assert client._ledstream_refcount == 0
-        assert LEDSTREAM_UPDATE_TOPIC not in client._push_callbacks
+        assert client._ledstream_callbacks == []
 
 
 class TestImagestreamRequiresAdmin:

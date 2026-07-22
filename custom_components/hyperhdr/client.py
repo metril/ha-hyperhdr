@@ -604,6 +604,35 @@ class HyperHdrInstanceClient(HyperHdrBaseClient):
         self.instance_id = instance_id
         self._ledstream_refcount = 0
         self._imagestream_refcount = 0
+        # Ledstream frames fan out to every registered consumer (unlike the
+        # base class's single-slot ``_push_callbacks`` table) -- camera.py
+        # runs two cameras (preview + gradient) per instance, and both may
+        # stream concurrently. Kept separate from ``_push_callbacks`` rather
+        # than generalizing that table: every other push topic (components/
+        # priorities/adjustment/effects/instance roster) has exactly one
+        # consumer (the coordinator), so fan-out there would be needless
+        # complexity for a case that never happens. See ``_dispatch_push``'s
+        # override below.
+        self._ledstream_callbacks: list[Callable[[dict[str, Any]], None]] = []
+
+    def _dispatch_push(self, topic: str, data: dict[str, Any]) -> None:
+        """Fan ``LEDSTREAM_UPDATE_TOPIC`` frames out to every registered
+        consumer; every other topic still goes through the inherited
+        single-callback-per-topic table unchanged."""
+        if topic != LEDSTREAM_UPDATE_TOPIC:
+            super()._dispatch_push(topic, data)
+            return
+        if not self._ledstream_callbacks:
+            _LOGGER.debug("no push callback registered for topic %s", topic)
+            return
+        for callback in list(self._ledstream_callbacks):
+            try:
+                callback(data)
+            except Exception:
+                # A broken consumer must not be allowed to kill the receive
+                # loop, nor prevent the frame from reaching the other
+                # registered consumers.
+                _LOGGER.exception("push callback for topic %s raised", topic)
 
     async def _post_connect(self) -> None:
         """Park this connection on ``instance_id`` via ``instance/switchTo``.
@@ -669,6 +698,12 @@ class HyperHdrInstanceClient(HyperHdrBaseClient):
     async def start_ledstream(self, cb: Callable[[dict[str, Any]], None]) -> None:
         """Register ``cb`` for LED-color stream frames, refcounted.
 
+        Every registered ``cb`` receives every frame (see
+        ``_dispatch_push``'s fan-out override) -- multiple concurrent
+        consumers (e.g. camera.py's LED preview AND gradient cameras of the
+        same instance) each get their own copy of the stream rather than
+        racing over a single slot.
+
         Rolls the refcount/callback back on a failed ``ledstream-start``
         send (e.g. the connection drops mid-call) -- otherwise a raised
         exception here would leave the refcount permanently incremented
@@ -680,22 +715,25 @@ class HyperHdrInstanceClient(HyperHdrBaseClient):
         see a non-zero refcount and skip resending the real start command).
         """
         self._ledstream_refcount += 1
-        self.set_push_callback(LEDSTREAM_UPDATE_TOPIC, cb)
+        self._ledstream_callbacks.append(cb)
         if self._ledstream_refcount == 1:
             try:
                 await self._send_command("ledcolors", subcommand="ledstream-start")
             except Exception:
                 self._ledstream_refcount -= 1
-                self.set_push_callback(LEDSTREAM_UPDATE_TOPIC, None)
+                self._ledstream_callbacks.remove(cb)
                 raise
 
     async def stop_ledstream(self, cb: Callable[[dict[str, Any]], None]) -> None:
-        """Decrement the ledstream refcount, stopping the stream at zero."""
+        """Decrement the ledstream refcount and unregister ``cb``, stopping
+        the stream (for every remaining consumer too) only once the last
+        one has stopped."""
         if self._ledstream_refcount == 0:
             return
         self._ledstream_refcount -= 1
+        with contextlib.suppress(ValueError):
+            self._ledstream_callbacks.remove(cb)
         if self._ledstream_refcount == 0:
-            self.set_push_callback(LEDSTREAM_UPDATE_TOPIC, None)
             await self._send_command("ledcolors", subcommand="ledstream-stop")
 
     async def start_imagestream(self, cb: Callable[[dict[str, Any]], None]) -> None:
