@@ -4,7 +4,7 @@ version = "1.0.0"
 description = "Home Assistant integration for HyperHDR ambient lighting"
 requires-python = ">=3.13"
 license = "MIT"
-dependencies = []
+dependencies = ["aiohttp>=3.9.0"]
 
 [project.optional-dependencies]
 dev = [
@@ -32,3 +32,4 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+pythonpath = ["."]
