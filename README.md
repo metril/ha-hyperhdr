@@ -20,7 +20,7 @@ A zero-dependency, push-based Home Assistant integration for [HyperHDR](https://
 - **Clear priority button** — clears this integration's own priority on an instance
 - **Instance running switch** — start/stop a HyperHDR instance (works without admin credentials on v22)
 - **Dynamic multi-instance devices** — every HyperHDR instance shows up as its own Home Assistant device, created the first time it's observed running and cleanly removed (device, entities, and all) if it's later deleted from the server — all live, with no HA restart required
-- **LED preview cameras** — two camera entities per instance (a to-scale LED layout preview and a soft ambient gradient preview), rendered from the live LED-color stream; **disabled by default** (enable them per-entity in the entity's settings if you want them — see [Known limitations](#known-limitations))
+- **LED preview camera** — a per-instance camera showing the live, to-scale LED layout rendered from the LED-color stream (the in-HA counterpart of HyperHDR's own dashboard visualization); **disabled by default** (enable it in the entity's settings if you want it — see [Known limitations](#known-limitations))
 - **Authentication** — optional API token and optional admin password, with full reauth support when credentials go stale
 - **SSDP discovery** — HyperHDR servers announcing themselves on the network are offered automatically
 - **Configurable options** — default priority, hidden effects, and connection timeouts, all changeable after setup without removing the integration
@@ -87,9 +87,8 @@ If your HyperHDR server sits behind a reverse proxy (Traefik, nginx, etc.):
 | Sensor | Version | Server-scoped, DIAGNOSTIC category |
 | Button | Clear priority | Clears this integration's own priority |
 | Camera | LED preview | To-scale LED layout preview; **disabled by default** |
-| Camera | LED gradient | Soft, upscaled ambient preview; **disabled by default** |
 
-Both cameras are disabled by default because rendering costs real work (either a Pillow draw + JPEG encode per still image, or a continuous LED-color stream subscription for the live MJPEG feed) — the integration never does that work unless you opt in. To enable one, go to **Settings > Devices & Services > HyperHDR**, open the instance's device, find the camera entity, and enable it from its entity settings. Neither camera is created at all for an instance whose server reports no LED layout.
+The camera is disabled by default because rendering costs real work (either a Pillow draw + JPEG encode per still image, or a continuous LED-color stream subscription for the live MJPEG feed) — the integration never does that work unless you opt in. To enable it, go to **Settings > Devices & Services > HyperHDR**, open the instance's device, find the camera entity, and enable it from its entity settings. The camera is not created at all for an instance whose server reports no LED layout.
 
 ## Services
 
@@ -104,7 +103,7 @@ All three services target a specific HyperHDR instance device via `device_id` (n
 ## Known limitations
 
 - **No smoothing controls or average-color sensor.** HyperHDR's smoothing configuration is only reachable through an admin-gated `getconfig`/`setconfig` call pair that wasn't verified against a live server; an average-color reading needs a polled API call this push-only integration deliberately never makes. Both are out of scope for v1.
-- **No `imagestream` camera.** Only the LED-color stream (`ledcolors`/`ledstream`) is used for the two camera entities. HyperHDR's separate video-preview stream (`imagestream`) is admin-gated and its frame shape was never verified live — deliberately out of scope for v1.
+- **No `imagestream` camera.** Only the LED-color stream (`ledcolors`/`ledstream`) is used for the camera entity. HyperHDR's separate video-preview stream (`imagestream`) is admin-gated and its frame shape was never verified live — deliberately out of scope for v1.
 - **HDR mode changes made outside Home Assistant aren't picked up live.** HyperHDR doesn't push an update when HDR tone mapping is toggled from its own web UI or another client; the select entity refreshes on the next reconnect/full `serverinfo` sync, not immediately. Changes made *through* this integration's own select entity update immediately (optimistic update).
 
 ## Requirements

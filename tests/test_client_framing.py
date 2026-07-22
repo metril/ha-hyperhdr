@@ -412,8 +412,8 @@ class TestLedstreamRefcounting:
     async def test_ledstream_frame_fans_out_to_every_registered_consumer(
         self, connected_instance: tuple[HyperHdrInstanceClient, FakeWebSocket]
     ) -> None:
-        """The directed fix: two concurrent consumers (e.g. camera.py's LED
-        preview AND gradient cameras of the same instance) must each get
+        """The directed fix: two concurrent consumers (e.g. a still capture
+        requested while camera.py's MJPEG stream is open) must each get
         every frame -- neither starves the other."""
         client, ws = connected_instance
         frames_a: list[dict[str, Any]] = []

@@ -13,15 +13,12 @@ from conftest import FakeConfigEntry, FakeHass
 from PIL import Image
 
 from custom_components.hyperhdr.camera import (
-    _GRADIENT_CANVAS_SIZE,
     _PREVIEW_SIZE,
-    HyperHdrLedGradientCamera,
     HyperHdrLedPreviewCamera,
     _entities_for_instance,
     aspect_fit,
     encode_jpeg,
     paint_leds,
-    render_led_gradient,
     render_led_preview,
 )
 from custom_components.hyperhdr.coordinator import (
@@ -90,18 +87,12 @@ class TestRenderHelpersProduceDeterministicOutputSize:
         image = render_led_preview([1, 2, 3], _row_geometry(1))
         assert image.size == _PREVIEW_SIZE
 
-    def test_led_gradient_upscales_from_small_canvas_to_full_preview_size(self) -> None:
-        image = render_led_gradient([1, 2, 3], _row_geometry(1))
-        assert image.size == _PREVIEW_SIZE
-        assert _GRADIENT_CANVAS_SIZE != _PREVIEW_SIZE  # sanity: genuinely upscaled, not a no-op
-
-    def test_render_helpers_tolerate_a_mismatched_geometry_length_too(self) -> None:
+    def test_render_helper_tolerates_a_mismatched_geometry_length_too(self) -> None:
         # LED layout edited after this frame was captured -- must render
         # defensively (truncate/ignore extras), never raise.
         frame = [1, 2, 3, 4, 5, 6, 7, 8, 9]  # 3 LEDs
         geometry = _row_geometry(1)  # only 1 LED of geometry
         assert render_led_preview(frame, geometry).size == _PREVIEW_SIZE
-        assert render_led_gradient(frame, geometry).size == _PREVIEW_SIZE
 
 
 class TestAspectFit:
@@ -187,7 +178,7 @@ def _make_setup() -> tuple[FakeConfigEntry, HyperHdrInstanceCoordinator]:
 
 
 class TestEntitiesForInstanceLedGeometryGuard:
-    async def test_no_led_geometry_creates_no_cameras(self) -> None:
+    async def test_no_led_geometry_creates_no_camera(self) -> None:
         entry, coordinator = _make_setup()
         coordinator.async_set_updated_data(_instance_data(led_geometry=()))
 
@@ -195,13 +186,12 @@ class TestEntitiesForInstanceLedGeometryGuard:
 
         assert entities == []
 
-    async def test_led_geometry_present_creates_both_cameras_disabled_by_default(self) -> None:
+    async def test_led_geometry_present_creates_the_preview_camera_disabled_by_default(self) -> None:
         entry, coordinator = _make_setup()
         coordinator.async_set_updated_data(_instance_data(led_geometry=tuple(_row_geometry(2))))
 
         entities = await _entities_for_instance(entry, coordinator, 1)
 
-        assert len(entities) == 2
+        assert len(entities) == 1
         assert isinstance(entities[0], HyperHdrLedPreviewCamera)
-        assert isinstance(entities[1], HyperHdrLedGradientCamera)
-        assert all(e._attr_entity_registry_enabled_default is False for e in entities)  # noqa: SLF001
+        assert entities[0]._attr_entity_registry_enabled_default is False  # noqa: SLF001

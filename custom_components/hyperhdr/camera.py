@@ -1,20 +1,17 @@
-"""Camera platform for the HyperHDR integration -- two entities per instance.
+"""Camera platform for the HyperHDR integration -- one entity per instance.
 
-Both entities render the live LED-color stream (``ledcolors``/``ledstream``,
-not the admin-gated ``imagestream`` -- see the module docstring's Constraints
-note) as a still/MJPEG image, using ``serverinfo``'s ``leds[]`` geometry
-(each LED's fractional ``hmin``/``hmax``/``vmin``/``vmax`` rectangle -- see
-``docs/api-notes.md`` and ``models.HyperHdrLedGeometry``):
+``led_preview`` renders the live LED-color stream (``ledcolors``/
+``ledstream``, not the admin-gated ``imagestream`` -- see the Constraints
+note below) as a still/MJPEG image, using ``serverinfo``'s ``leds[]``
+geometry (each LED's fractional ``hmin``/``hmax``/``vmin``/``vmax``
+rectangle -- see ``docs/api-notes.md`` and ``models.HyperHdrLedGeometry``):
+each LED painted as its own rectangle on a 640x360 canvas -- an accurate
+physical-layout preview, mirroring HyperHDR's own web-UI LED visualization.
 
-- ``led_preview``: each LED painted as its own rectangle on a 640x360
-  canvas -- an accurate physical-layout preview.
-- ``led_gradient``: the same frame painted onto a tiny 64x36 canvas, then
-  upscaled with bilinear smoothing -- a soft ambient-lighting preview.
-
-Both are DISABLED BY DEFAULT (``_attr_entity_registry_enabled_default``) --
+It is DISABLED BY DEFAULT (``_attr_entity_registry_enabled_default``) --
 rendering costs real work (a Pillow draw + JPEG encode per still, or a
 continuous ledstream subscription for MJPEG), so this integration never
-does that work unless a user explicitly opts in. Neither is created at all
+does that work unless a user explicitly opts in. It is not created at all
 for an instance whose ``serverinfo`` reports no LED geometry (a build/config
 without an LED layout defined).
 
@@ -59,11 +56,8 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
-# Output size for both cameras' still images and the MJPEG stream.
+# Output size for still images and the MJPEG stream.
 _PREVIEW_SIZE = (640, 360)
-# led_gradient paints onto this tiny canvas first, then upscales with
-# bilinear smoothing -- the whole point being a soft blend, not a sharp grid.
-_GRADIENT_CANVAS_SIZE = (64, 36)
 _JPEG_QUALITY = 80
 # MJPEG stream throttle -- see handle_async_mjpeg_stream.
 _MJPEG_MIN_FRAME_INTERVAL = 0.1  # ~10 fps
@@ -95,22 +89,19 @@ async def async_setup_entry(
 async def _entities_for_instance(
     entry: HyperHdrConfigEntry, coordinator: HyperHdrInstanceCoordinator, instance_id: int
 ) -> list[Camera]:
-    """Build both camera entities for one instance -- or neither.
+    """Build the camera entity for one instance -- or none.
 
     Bounded-waits for a connected snapshot first (``wait_for_connected_data``),
     same reasoning as switch.py/number.py: the entity *set* built here is a
     one-time snapshot, and ``coordinator.data.led_geometry`` is empty on the
     disconnected placeholder. Guard: an instance whose ``serverinfo`` never
-    reports LED geometry at all (no LED layout configured) gets neither
-    camera, not two permanently-unavailable ones.
+    reports LED geometry at all (no LED layout configured) gets no camera,
+    not a permanently-unavailable one.
     """
     data = await wait_for_connected_data(coordinator)
     if not data.led_geometry:
         return []
-    return [
-        HyperHdrLedPreviewCamera(coordinator, entry, instance_id),
-        HyperHdrLedGradientCamera(coordinator, entry, instance_id),
-    ]
+    return [HyperHdrLedPreviewCamera(coordinator, entry, instance_id)]
 
 
 # --- pure render helpers (no HA/entity state -- unit-testable directly) -----------------------
@@ -155,13 +146,6 @@ def render_led_preview(frame: Sequence[int], geometry: Sequence[HyperHdrLedGeome
     """The physical LED layout preview: each LED as its own rectangle on a
     640x360 canvas."""
     return paint_leds(frame, geometry, _PREVIEW_SIZE)
-
-
-def render_led_gradient(frame: Sequence[int], geometry: Sequence[HyperHdrLedGeometry]) -> Image.Image:
-    """A soft ambient-lighting preview: the same frame painted onto a tiny
-    64x36 canvas, then upscaled to 640x360 with bilinear smoothing."""
-    small = paint_leds(frame, geometry, _GRADIENT_CANVAS_SIZE)
-    return small.resize(_PREVIEW_SIZE, Image.Resampling.BILINEAR)
 
 
 def aspect_fit(image: Image.Image, width: int | None, height: int | None) -> Image.Image:
@@ -210,7 +194,8 @@ def _extract_leds(push: dict[str, Any]) -> list[int] | None:
 
 
 class _HyperHdrCameraBase(HyperHdrInstanceEntity, Camera):
-    """Shared ledstream-capture/render/serve machinery for both cameras."""
+    """Ledstream-capture/render/serve machinery, separate from the concrete
+    render so the pure helpers above stay directly unit-testable."""
 
     _attr_entity_registry_enabled_default = False
 
@@ -325,16 +310,3 @@ class HyperHdrLedPreviewCamera(_HyperHdrCameraBase):
 
     def _render(self, frame: list[int]) -> Image.Image:
         return render_led_preview(frame, self.coordinator.data.led_geometry)
-
-
-class HyperHdrLedGradientCamera(_HyperHdrCameraBase):
-    """Renders a soft, upscaled ambient-lighting preview of the LED colors."""
-
-    _attr_name = "LED gradient"
-
-    def __init__(self, coordinator: HyperHdrInstanceCoordinator, entry: HyperHdrConfigEntry, instance_id: int) -> None:
-        """Initialize the LED gradient camera."""
-        super().__init__(coordinator, entry, instance_id, "led_gradient")
-
-    def _render(self, frame: list[int]) -> Image.Image:
-        return render_led_gradient(frame, self.coordinator.data.led_geometry)

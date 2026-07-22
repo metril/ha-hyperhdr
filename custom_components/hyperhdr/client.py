@@ -616,8 +616,8 @@ class HyperHdrInstanceClient(HyperHdrBaseClient):
         self._imagestream_refcount = 0
         # Ledstream frames fan out to every registered consumer (unlike the
         # base class's single-slot ``_push_callbacks`` table) -- camera.py
-        # runs two cameras (preview + gradient) per instance, and both may
-        # stream concurrently. Kept separate from ``_push_callbacks`` rather
+        # can have concurrent consumers (a still capture requested while an
+        # MJPEG stream is open). Kept separate from ``_push_callbacks`` rather
         # than generalizing that table: every other push topic (components/
         # priorities/adjustment/effects/instance roster) has exactly one
         # consumer (the coordinator), so fan-out there would be needless
@@ -710,8 +710,8 @@ class HyperHdrInstanceClient(HyperHdrBaseClient):
 
         Every registered ``cb`` receives every frame (see
         ``_dispatch_push``'s fan-out override) -- multiple concurrent
-        consumers (e.g. camera.py's LED preview AND gradient cameras of the
-        same instance) each get their own copy of the stream rather than
+        consumers (e.g. a still capture requested while camera.py's MJPEG
+        stream is open) each get their own copy of the stream rather than
         racing over a single slot.
 
         Rolls the refcount/callback back on a failed ``ledstream-start``

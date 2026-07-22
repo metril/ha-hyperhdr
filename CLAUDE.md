@@ -25,7 +25,7 @@ custom_components/hyperhdr/
 ├── number.py              (211)  Presence-based adjustment-field number entities
 ├── sensor.py              (177)  Visible priority / LED count / video mode / server version sensors
 ├── button.py               (63)  Clear-priority button, one per instance
-├── camera.py              (340)  LED preview + gradient camera entities (disabled by default), MJPEG stream + still capture
+├── camera.py              (312)  LED preview camera entity (disabled by default), MJPEG stream + still capture
 ├── manifest.json            (17)  Integration metadata
 ├── strings.json            (165)  Translation source (config flow strings)
 ├── translations/en.json    (165)  English translations (mirrors strings.json)
