@@ -21,6 +21,13 @@ DEFAULT_HEARTBEAT = 30.0
 DEFAULT_STALE_TIMEOUT = 90.0
 RECONNECT_BASE_DELAY = 2.0
 RECONNECT_MAX_DELAY = 60.0
+WATCHDOG_INTERVAL = 15.0
+
+# Ledstream/imagestream push topics. These reuse the *request's* tan on every
+# frame (not a fresh/incrementing tan) and key their payload "result", unlike
+# every other `-update` push topic (which use "data") -- see docs/api-notes.md.
+LEDSTREAM_UPDATE_TOPIC = "ledcolors-ledstream-update"
+IMAGESTREAM_UPDATE_TOPIC = "ledcolors-imagestream-update"
 
 # Options keys.
 OPT_DEFAULT_PRIORITY = "default_priority"
