@@ -1,0 +1,17 @@
+{
+  "domain": "hyperhdr",
+  "name": "HyperHDR",
+  "codeowners": ["@metril"],
+  "config_flow": true,
+  "dependencies": ["ssdp"],
+  "documentation": "https://github.com/metril/ha-hyperhdr",
+  "integration_type": "hub",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/metril/ha-hyperhdr/issues",
+  "requirements": [],
+  "ssdp": [
+    { "manufacturer": "HyperHDR Open Source Ambient Lighting" },
+    { "st": "urn:hyperhdr.eu:device:basic:1" }
+  ],
+  "version": "0.1.0"
+}
