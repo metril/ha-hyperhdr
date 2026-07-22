@@ -260,6 +260,29 @@ class TestServerReconnectViaOnConnected:
         assert runtime.server_coordinator.data.instances.keys() == {1}
 
 
+class TestAsyncCreateInstanceClientAuthFailed:
+    async def test_on_auth_failed_triggers_reauth(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Regression: instance clients previously left ``on_auth_failed``
+        unwired entirely, so a bad token/admin password on an *instance*
+        connection never triggered a reauth flow (only the server client
+        did)."""
+        hass = FakeHass()
+        entry = _entry()
+        captured_kwargs: dict[str, Any] = {}
+
+        class _CapturingInstanceClient:
+            def __init__(self, session: Any, host: str, port: int, **kwargs: Any) -> None:
+                captured_kwargs.update(kwargs)
+
+        monkeypatch.setattr(hyperhdr, "HyperHdrInstanceClient", _CapturingInstanceClient)
+
+        await hyperhdr._async_create_instance_client(hass, entry, 0)  # type: ignore[arg-type]
+
+        assert entry.reauth_started is False
+        captured_kwargs["on_auth_failed"]()
+        assert entry.reauth_started is True
+
+
 class TestAsyncUnloadEntry:
     async def test_stops_all_instance_clients_and_server_client(self, monkeypatch: pytest.MonkeyPatch) -> None:
         hass = FakeHass()

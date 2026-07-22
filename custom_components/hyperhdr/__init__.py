@@ -95,9 +95,20 @@ async def _async_create_instance_client(
 
     Module-level so tests can monkeypatch it. The caller is responsible for
     attaching it to a coordinator and calling ``start()``.
+
+    ``on_auth_failed`` is wired here (not by ``attach_client``, which only
+    swaps ``on_connected``/``on_disconnected``) to the same reauth trigger as
+    the server client. Safe to call unconditionally -- unlike the server
+    client's callback, an instance client is never created before
+    ``entry.runtime_data`` exists (every call site is downstream of that
+    assignment), so there's no pre-setup race to guard against here.
     """
     session = _get_session(hass, entry)
     options = entry.options
+
+    def _handle_auth_failed() -> None:
+        entry.async_start_reauth(hass)
+
     return HyperHdrInstanceClient(
         session,
         entry.data[CONF_HOST],
@@ -109,6 +120,7 @@ async def _async_create_instance_client(
         request_timeout=options.get(OPT_REQUEST_TIMEOUT, DEFAULT_REQUEST_TIMEOUT),
         heartbeat=options.get(OPT_HEARTBEAT, DEFAULT_HEARTBEAT),
         stale_timeout=options.get(OPT_STALE_TIMEOUT, DEFAULT_STALE_TIMEOUT),
+        on_auth_failed=_handle_auth_failed,
     )
 
 
