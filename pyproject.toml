@@ -1,6 +1,6 @@
 [project]
 name = "ha-hyperhdr"
-version = "1.0.0"
+version = "0.1.0"
 description = "Home Assistant integration for HyperHDR ambient lighting"
 requires-python = ">=3.13"
 license = "MIT"
@@ -8,10 +8,10 @@ dependencies = ["aiohttp>=3.9.0", "voluptuous>=0.13.1"]
 
 [project.optional-dependencies]
 dev = [
-    "ruff>=0.4.0",
-    "mypy>=1.10.0",
-    "pytest>=8.0.0",
-    "pytest-asyncio>=0.23.0",
+    "ruff>=0.15.0",
+    "mypy>=2.0.0",
+    "pytest>=9.0.0",
+    "pytest-asyncio>=1.0.0",
     "pillow>=12.3.0",
 ]
 

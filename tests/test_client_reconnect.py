@@ -306,24 +306,25 @@ class TestStopAndMidRequestDisconnect:
 
 class TestStartInstanceSyntheticPush:
     async def test_start_instance_success_triggers_synthetic_roster_refresh(self) -> None:
-        ws = FakeWebSocket(build_connect_script(admin_password="hyperhdr"))
+        # No admin_password -- startInstance requires no admin login on
+        # HyperHDR v22 (see client.py's start_instance docstring).
+        ws = FakeWebSocket(build_connect_script())
         session = FakeClientSession(ws)
-        client = HyperHdrServerClient(session, "localhost", 8090, admin_password="hyperhdr")  # type: ignore[arg-type]
+        client = HyperHdrServerClient(session, "localhost", 8090)  # type: ignore[arg-type]
 
         pushes: list[dict[str, Any]] = []
         client.set_push_callback("instance-update", pushes.append)
 
         await client.start()
         await wait_until(lambda: client.connected)
-        assert client.admin_logged_in is True
 
         task = asyncio.ensure_future(client.start_instance(1))
-        await wait_until(lambda: len(ws.sent) >= 4)
+        await wait_until(lambda: len(ws.sent) >= 3)
         start_tan = ws.sent[-1]["tan"]
         assert ws.sent[-1]["subcommand"] == "startInstance"
         ws.push({"command": "instance-startInstance", "success": True, "tan": start_tan})
 
-        await wait_until(lambda: len(ws.sent) >= 5)
+        await wait_until(lambda: len(ws.sent) >= 4)
         serverinfo_tan = ws.sent[-1]["tan"]
         roster = [
             {"instance": 0, "friendly_name": "First LED instance", "running": True},
