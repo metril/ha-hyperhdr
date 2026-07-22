@@ -323,6 +323,20 @@ class FakeConfigEntry:
     def async_start_reauth(self, hass: Any) -> None:
         self.reauth_started = True
 
+    def as_dict(self) -> dict[str, Any]:
+        """Stand-in for the real ``ConfigEntry.as_dict()`` -- only the
+        fields diagnostics.py actually surfaces (notably ``data``, which
+        carries the redaction-sensitive host/token/admin_password)."""
+        return {
+            "entry_id": self.entry_id,
+            "domain": self.domain,
+            "title": self.title,
+            "data": dict(self.data),
+            "options": dict(self.options),
+            "unique_id": self.unique_id,
+            "source": "user",
+        }
+
     def __class_getitem__(cls, item: Any) -> Any:
         # Supports ``ConfigEntry[HyperHdrRuntimeData]`` (PEP 695 ``type``
         # alias RHS) without needing real Generic machinery.
