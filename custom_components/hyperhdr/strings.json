@@ -1,5 +1,120 @@
 {
   "config": {
-    "step": {}
+    "step": {
+      "user": {
+        "title": "Connect to HyperHDR",
+        "description": "Enter the address of your HyperHDR server.",
+        "data": {
+          "host": "Host",
+          "port": "Port",
+          "use_ssl": "Use SSL (wss://)",
+          "verify_ssl": "Verify SSL certificate"
+        },
+        "data_description": {
+          "host": "IP address or hostname of the HyperHDR server. If HyperHDR sits behind a reverse proxy (e.g. Traefik) that terminates TLS, enter that proxy's hostname here and enable \"Use SSL\" below.",
+          "port": "The JSON API port (default 8090). If you're going through a reverse proxy, this is the proxy's exposed port, not necessarily 8090.",
+          "use_ssl": "Enable if HyperHDR is only reachable over wss:// (typically via a TLS-terminating reverse proxy). Most direct-LAN setups leave this off.",
+          "verify_ssl": "Disable only for a self-signed or otherwise untrusted certificate (e.g. many home reverse-proxy setups). Has no effect unless \"Use SSL\" is enabled."
+        }
+      },
+      "ssdp_confirm": {
+        "title": "HyperHDR discovered",
+        "description": "A HyperHDR server was found on your network. Confirm (or adjust) its connection details to add it.",
+        "data": {
+          "host": "Host",
+          "port": "Port",
+          "use_ssl": "Use SSL (wss://)",
+          "verify_ssl": "Verify SSL certificate"
+        },
+        "data_description": {
+          "host": "IP address or hostname of the HyperHDR server. If HyperHDR sits behind a reverse proxy (e.g. Traefik) that terminates TLS, enter that proxy's hostname here and enable \"Use SSL\" below.",
+          "port": "The JSON API port (default 8090). If you're going through a reverse proxy, this is the proxy's exposed port, not necessarily 8090.",
+          "use_ssl": "Enable if HyperHDR is only reachable over wss:// (typically via a TLS-terminating reverse proxy). Most direct-LAN setups leave this off.",
+          "verify_ssl": "Disable only for a self-signed or otherwise untrusted certificate (e.g. many home reverse-proxy setups). Has no effect unless \"Use SSL\" is enabled."
+        }
+      },
+      "auth": {
+        "title": "API token required",
+        "description": "This HyperHDR server requires an API token. Create one in HyperHDR's web UI under **Network Services → API Access**, then paste it below. (Requesting a new token from within Home Assistant isn't supported yet -- use HyperHDR's own UI.)",
+        "data": {
+          "token": "API token"
+        },
+        "data_description": {
+          "token": "The token string shown after creating/approving it in HyperHDR's Network Services panel."
+        }
+      },
+      "admin": {
+        "title": "Admin access (optional)",
+        "description": "Provide HyperHDR's admin password to let Home Assistant start/stop instances and use other admin-gated features (e.g. live preview). Leave this blank to skip -- you can still control colors, effects, and adjustments without it.",
+        "data": {
+          "admin_password": "Admin password"
+        },
+        "data_description": {
+          "admin_password": "HyperHDR's admin password (set in Network Services → User Interface Access). Leave empty if you don't want Home Assistant to have admin access."
+        }
+      },
+      "reauth_confirm": {
+        "title": "Reauthenticate HyperHDR",
+        "description": "Home Assistant lost access to this HyperHDR server. Provide an updated API token and/or admin password.",
+        "data": {
+          "token": "API token",
+          "admin_password": "Admin password"
+        },
+        "data_description": {
+          "token": "Leave blank if the server no longer requires a token.",
+          "admin_password": "Leave blank to leave the previously configured admin password unchanged."
+        }
+      },
+      "reconfigure": {
+        "title": "Reconfigure HyperHDR",
+        "description": "Update this HyperHDR server's connection details.",
+        "data": {
+          "host": "Host",
+          "port": "Port",
+          "use_ssl": "Use SSL (wss://)",
+          "verify_ssl": "Verify SSL certificate"
+        },
+        "data_description": {
+          "host": "IP address or hostname of the HyperHDR server. If HyperHDR sits behind a reverse proxy (e.g. Traefik) that terminates TLS, enter that proxy's hostname here and enable \"Use SSL\" below.",
+          "port": "The JSON API port (default 8090). If you're going through a reverse proxy, this is the proxy's exposed port, not necessarily 8090.",
+          "use_ssl": "Enable if HyperHDR is only reachable over wss:// (typically via a TLS-terminating reverse proxy). Most direct-LAN setups leave this off.",
+          "verify_ssl": "Disable only for a self-signed or otherwise untrusted certificate (e.g. many home reverse-proxy setups). Has no effect unless \"Use SSL\" is enabled."
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to HyperHDR. Check the host, port, and SSL settings.",
+      "invalid_auth": "Invalid token or admin password.",
+      "unknown": "Unexpected error. Check the Home Assistant logs for details."
+    },
+    "abort": {
+      "already_configured": "This HyperHDR server is already configured.",
+      "already_in_progress": "This HyperHDR server is already being configured.",
+      "cannot_connect": "Could not determine the discovered device's address.",
+      "reauth_successful": "Reauthentication was successful.",
+      "reconfigure_successful": "Reconfiguration was successful.",
+      "wrong_device": "This address belongs to a different HyperHDR server than the one being reconfigured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "HyperHDR options",
+        "data": {
+          "default_priority": "Default priority",
+          "hidden_effects": "Hidden effects",
+          "request_timeout": "Request timeout (seconds)",
+          "heartbeat": "WebSocket heartbeat (seconds)",
+          "stale_timeout": "Stale connection timeout (seconds)"
+        },
+        "data_description": {
+          "default_priority": "The HyperHDR priority (1-253) Home Assistant uses when setting colors/effects. Lower numbers win over higher numbers on HyperHDR's priority stack.",
+          "hidden_effects": "Effects to exclude from the effect list entity (e.g. ones you never use). Effects already hidden remain selectable here even if HyperHDR isn't currently reporting them (e.g. while disconnected).",
+          "request_timeout": "How long to wait for a response to a single command before treating it as failed.",
+          "heartbeat": "How often to send a WebSocket ping to keep the connection alive.",
+          "stale_timeout": "Force a reconnect if nothing has been received from the server for this long."
+        }
+      }
+    }
   }
 }

@@ -97,6 +97,7 @@ class HyperHdrBaseClient:
         self.on_auth_failed = on_auth_failed
 
         self.admin_logged_in = False
+        self.token_required = False
         self.malformed_or_unmatched_count = 0
 
         self._ws: aiohttp.ClientWebSocketResponse | None = None
@@ -219,9 +220,13 @@ class HyperHdrBaseClient:
         self.admin_logged_in = False
         response = await self._send_command("authorize", subcommand="tokenRequired")
         info = response.get("info")
-        token_required = bool(info.get("required", False)) if isinstance(info, dict) else False
+        # Set as a public attribute (not a local) so it survives even when
+        # this method goes on to raise below -- the config flow's one-shot
+        # validation reads it to distinguish "token required" from other
+        # auth failures.
+        self.token_required = bool(info.get("required", False)) if isinstance(info, dict) else False
 
-        if token_required:
+        if self.token_required:
             if not self._token:
                 raise HyperHdrAuthError("server requires a token but none is configured")
             login_response = await self._send_command(
@@ -383,6 +388,44 @@ class HyperHdrServerClient(HyperHdrBaseClient):
         response = await self._send_command("sysinfo")
         info = response.get("info")
         return HyperHdrSysInfo.from_dict(info if isinstance(info, dict) else {})
+
+    async def async_connect_once(self) -> HyperHdrSysInfo:
+        """Single connect + auth handshake + ``sysinfo`` fetch, then always
+        disconnect -- no supervisor/retry loop, no push subscriptions, and
+        no staleness watchdog (this is a short-lived, one-shot probe, not a
+        persistent connection).
+
+        Used by the config flow's connection validation, which needs one
+        deterministic outcome per attempt rather than the supervisor's
+        infinite retry loop. Raises ``HyperHdrAuthError`` on a bad/missing
+        token or admin password (``self.token_required`` is set as a side
+        effect of the attempt either way -- even when this raises -- so the
+        caller can distinguish "token required" from other auth failures)
+        or ``HyperHdrConnectionError`` on any transport failure.
+        """
+        ws = await self._session.ws_connect(self.ws_url, heartbeat=self._heartbeat)
+        self._ws = ws
+        self._tan_counter = itertools.count(1)
+        self._pending = {}
+        self._last_rx = self._monotonic()
+        self._handshake_complete = False
+        self.admin_logged_in = False
+
+        receive_task: asyncio.Task[None] = asyncio.ensure_future(self._receive_loop())
+        try:
+            await self._auth_handshake()
+            self._handshake_complete = True
+            return await self.async_sysinfo()
+        finally:
+            self._handshake_complete = False
+            if not ws.closed:
+                await ws.close()
+            if not receive_task.done():
+                receive_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await receive_task
+            self._fail_pending(HyperHdrConnectionError("connection closed"))
+            self._ws = None
 
     async def start_instance(self, instance_id: int) -> None:
         """Start a configured instance.

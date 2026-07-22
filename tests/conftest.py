@@ -209,6 +209,10 @@ def serverinfo_frame(tan: int, info: dict[str, Any] | None = None) -> dict[str, 
     return {"command": "serverinfo", "success": True, "tan": tan, "info": info if info is not None else {}}
 
 
+def sysinfo_frame(tan: int, info: dict[str, Any] | None = None) -> dict[str, Any]:
+    return {"command": "sysinfo", "success": True, "tan": tan, "info": info if info is not None else {}}
+
+
 def build_connect_script(
     *,
     token_required: bool = False,
@@ -650,6 +654,64 @@ def _stub_homeassistant() -> None:
     )
     ha_helpers.aiohttp_client = ha_ac
 
+    # Selector stubs for flow_support.py: real HA selectors are data-shape
+    # wrappers around a config dict with no flow-manager behavior of their
+    # own, so a bare "store what I was given" stand-in is faithful enough
+    # for schema-shape tests (which only ever inspect vol.Schema's keys/
+    # defaults, never call the selector as a validator).
+    class _FakeSelector:
+        def __init__(self, config: Any = None) -> None:
+            self.config = config
+
+        def __call__(self, data: Any) -> Any:
+            # Real Selectors validate/coerce; voluptuous requires the
+            # schema value to be callable to compile at all. Identity is
+            # enough -- these tests only ever inspect vol.Schema's keys/
+            # defaults, never feed data through the schema.
+            return data
+
+    class TextSelector(_FakeSelector):
+        pass
+
+    class NumberSelector(_FakeSelector):
+        pass
+
+    class BooleanSelector(_FakeSelector):
+        pass
+
+    class SelectSelector(_FakeSelector):
+        pass
+
+    def _selector_config(**kwargs: Any) -> dict[str, Any]:
+        return dict(kwargs)
+
+    class TextSelectorType:
+        TEXT = "text"
+        PASSWORD = "password"
+
+    class NumberSelectorMode:
+        BOX = "box"
+        SLIDER = "slider"
+
+    class SelectSelectorMode:
+        DROPDOWN = "dropdown"
+        LIST = "list"
+
+    ha_selector = _make_module(
+        "homeassistant.helpers.selector",
+        TextSelector=TextSelector,
+        TextSelectorConfig=_selector_config,
+        TextSelectorType=TextSelectorType,
+        NumberSelector=NumberSelector,
+        NumberSelectorConfig=_selector_config,
+        NumberSelectorMode=NumberSelectorMode,
+        BooleanSelector=BooleanSelector,
+        SelectSelector=SelectSelector,
+        SelectSelectorConfig=_selector_config,
+        SelectSelectorMode=SelectSelectorMode,
+    )
+    ha_helpers.selector = ha_selector
+
     sys.modules["homeassistant"] = ha
     sys.modules["homeassistant.core"] = ha_core
     sys.modules["homeassistant.config_entries"] = ha_ce
@@ -661,6 +723,7 @@ def _stub_homeassistant() -> None:
     sys.modules["homeassistant.helpers.entity_registry"] = ha_er
     sys.modules["homeassistant.helpers.dispatcher"] = ha_dispatcher
     sys.modules["homeassistant.helpers.aiohttp_client"] = ha_ac
+    sys.modules["homeassistant.helpers.selector"] = ha_selector
 
 
 _stub_homeassistant()

@@ -4,7 +4,7 @@ version = "1.0.0"
 description = "Home Assistant integration for HyperHDR ambient lighting"
 requires-python = ">=3.13"
 license = "MIT"
-dependencies = ["aiohttp>=3.9.0"]
+dependencies = ["aiohttp>=3.9.0", "voluptuous>=0.13.1"]
 
 [project.optional-dependencies]
 dev = [
