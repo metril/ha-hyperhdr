@@ -17,20 +17,30 @@ DEFAULT_PORT = 8090
 DEFAULT_PRIORITY = 128
 DEFAULT_ORIGIN = "Home Assistant"
 DEFAULT_REQUEST_TIMEOUT = 10.0
-# NOTE (Phase 5+6, confirmed live): client.py currently does NOT forward
-# this to aiohttp's ws_connect(heartbeat=...) -- this HyperHDR docker
-# image's WS server replies to a low-level PING with a malformed fragmented
-# control frame, which aiohttp correctly force-closes the connection over
-# per RFC 6455, reproducing every `heartbeat` seconds. Kept as a config
-# option (constructor param, OPT_HEARTBEAT) for backwards compatibility and
-# in case a future/different HyperHDR build handles it correctly, but it is
-# a no-op today; DEFAULT_STALE_TIMEOUT's rx-staleness watchdog is the
-# active liveness mechanism. See client.py's _connect_once for the full note.
+# NOTE (Phase 5+6, confirmed live): client.py does NOT forward this to
+# aiohttp's ws_connect(heartbeat=...) -- this HyperHDR docker image's WS
+# server replies to a low-level PING with a malformed fragmented control
+# frame, which aiohttp correctly force-closes the connection over per RFC
+# 6455, reproducing every `heartbeat` seconds. See client.py's _connect_once
+# for the full note.
+#
+# NOTE (Phase 7+8, confirmed live): with the low-level ping disabled above,
+# an otherwise-idle connection (nothing subscribed pushes, nothing polled)
+# never receives ANY frame until DEFAULT_STALE_TIMEOUT's rx-staleness
+# watchdog forces a close -- observed live as a reconnect cycling every
+# ~90s while HA sat idle. `heartbeat` is now used for an app-level
+# keepalive instead: _watchdog sends a lightweight `sysinfo` request once
+# the connection has been idle for `heartbeat` seconds, whose response
+# refreshes `_last_rx` via the normal receive loop, resetting the
+# staleness clock without depending on WS-level ping/pong at all.
 DEFAULT_HEARTBEAT = 30.0
 DEFAULT_STALE_TIMEOUT = 90.0
 RECONNECT_BASE_DELAY = 2.0
 RECONNECT_MAX_DELAY = 60.0
-WATCHDOG_INTERVAL = 15.0
+# Tightened from 15.0 (Phase 7+8) so the idle-check cadence gives the
+# app-level keepalive above a tighter bound relative to `heartbeat`/
+# `stale_timeout` -- evenly divides both defaults (30s/90s).
+WATCHDOG_INTERVAL = 10.0
 
 # Ledstream/imagestream push topics. These reuse the *request's* tan on every
 # frame (not a fresh/incrementing tan) and key their payload "result", unlike

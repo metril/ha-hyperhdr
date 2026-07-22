@@ -43,7 +43,7 @@ from .const import (
     SUBSCRIPTIONS,
     WATCHDOG_INTERVAL,
 )
-from .exceptions import HyperHdrApiError, HyperHdrAuthError, HyperHdrConnectionError
+from .exceptions import HyperHdrApiError, HyperHdrAuthError, HyperHdrConnectionError, HyperHdrError
 from .models import HyperHdrSysInfo
 
 _LOGGER = logging.getLogger(__name__)
@@ -58,6 +58,23 @@ _CLOSING_TYPES = (
 OnConnectedCallback = Callable[[dict[str, Any]], "Awaitable[None] | None"]
 OnDisconnectedCallback = Callable[[], Any]
 OnAuthFailedCallback = Callable[[], Any]
+
+# The exponent is clamped before ``2**attempt`` -- past this point the
+# uncapped delay already vastly exceeds RECONNECT_MAX_DELAY (with the
+# current defaults, that happens by attempt 5), so the clamp never changes
+# the *result*, only guards the float conversion below it from overflowing
+# for a very large `attempt`. Without it, a sufficiently long real-world
+# outage (attempt increments roughly once per retry, i.e. every
+# RECONNECT_MAX_DELAY-ish seconds once saturated -- reachable within a day
+# or two of continuous failures) eventually raises OverflowError computing
+# ``float * 2**attempt``, permanently killing the reconnect supervisor task
+# with nothing left to resurrect it.
+_MAX_BACKOFF_ATTEMPT = 20
+
+
+def _backoff_delay(attempt: int) -> float:
+    """The deterministic (pre-jitter) reconnect backoff delay for `attempt`."""
+    return min(RECONNECT_BASE_DELAY * (2 ** min(attempt, _MAX_BACKOFF_ATTEMPT)), RECONNECT_MAX_DELAY)
 
 
 class HyperHdrBaseClient:
@@ -178,23 +195,21 @@ class HyperHdrBaseClient:
                 attempt = 0
             if self._stopping:
                 return
-            delay = min(RECONNECT_BASE_DELAY * (2**attempt), RECONNECT_MAX_DELAY) * random.uniform(0.8, 1.2)
+            delay = _backoff_delay(attempt) * random.uniform(0.8, 1.2)
             attempt += 1
             await self._sleep(delay)
 
     async def _connect_once(self) -> None:
-        # heartbeat intentionally NOT forwarded to aiohttp's ws_connect
-        # (self._heartbeat is accepted for backwards-compatible construction/
-        # options but otherwise currently unused) -- confirmed live, Phase
-        # 5+6: this server's reply to aiohttp's low-level PING is a
-        # malformed fragmented control frame, which aiohttp correctly
-        # rejects per RFC 6455 by force-closing the connection, reproducing
-        # every `heartbeat` seconds like clockwork (root-caused with a raw
-        # aiohttp probe against hyperhdr-dev; matches the "sent 1002
-        # fragmented control frame" gotcha docs/api-notes.md already noted
-        # for ledstream). The existing rx-staleness `_watchdog` below
-        # already provides equivalent liveness detection without depending
-        # on WS-level ping/pong, so nothing is lost by disabling this.
+        # heartbeat intentionally NOT forwarded to aiohttp's ws_connect --
+        # confirmed live, Phase 5+6: this server's reply to aiohttp's
+        # low-level PING is a malformed fragmented control frame, which
+        # aiohttp correctly rejects per RFC 6455 by force-closing the
+        # connection, reproducing every `heartbeat` seconds like clockwork
+        # (root-caused with a raw aiohttp probe against hyperhdr-dev;
+        # matches the "sent 1002 fragmented control frame" gotcha
+        # docs/api-notes.md already noted for ledstream). `self._heartbeat`
+        # is instead used by `_watchdog`'s app-level keepalive (Phase
+        # 7+8) below -- see DEFAULT_HEARTBEAT's note in const.py.
         ws = await self._session.ws_connect(self.ws_url, heartbeat=None)
         self._ws = ws
         self._tan_counter = itertools.count(1)
@@ -368,17 +383,49 @@ class HyperHdrBaseClient:
             if not future.done():
                 future.set_exception(exc)
 
-    # --- staleness watchdog --------------------------------------------
+    # --- staleness watchdog + app-level keepalive -----------------------
 
     async def _watchdog(self) -> None:
         while True:
             await self._sleep(WATCHDOG_INTERVAL)
             if self._ws is None or self._ws.closed:
                 return
-            if self._monotonic() - self._last_rx >= self._stale_timeout:
+            idle = self._monotonic() - self._last_rx
+            if idle >= self._stale_timeout:
                 _LOGGER.debug("connection stale (no rx for >= %.1fs), forcing close", self._stale_timeout)
                 await self._ws.close()
                 return
+            if idle >= self._heartbeat:
+                await self._send_keepalive()
+
+    async def _send_keepalive(self) -> None:
+        """Send a lightweight ``sysinfo`` request to refresh ``_last_rx``.
+
+        Only reached once the connection has sat idle (no received frame,
+        pushed or otherwise) for ``self._heartbeat`` seconds -- see
+        DEFAULT_HEARTBEAT's note in const.py for why this exists (the
+        low-level WS ping is disabled; the server otherwise sends nothing
+        at all while idle, and the staleness watchdog above would
+        eventually force-close a connection that's actually still healthy).
+
+        The response is matched/consumed like any other command through the
+        normal tan-correlated request path, and ``_receive_loop`` already
+        stamps ``_last_rx`` on every received frame -- so a successful
+        response alone is enough to reset the idle clock; nothing else
+        needs to happen here on success.
+
+        A failure (timeout, or the rare ``success: false``) is deliberately
+        swallowed, not re-raised: this runs inside the watchdog's own loop,
+        which must keep running regardless. Nothing bespoke is needed for
+        the failure case either -- ``_last_rx`` stays stale, and the next
+        watchdog tick's staleness check (above) will force a reconnect once
+        ``stale_timeout`` is reached, the same as if no keepalive had been
+        attempted at all.
+        """
+        try:
+            await self._send_command("sysinfo", timeout=self._request_timeout)
+        except HyperHdrError as err:
+            _LOGGER.debug("keepalive request failed, deferring to the staleness check: %s", err)
 
     # --- misc -------------------------------------------------------------
 
