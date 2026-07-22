@@ -44,7 +44,7 @@ from .const import (
     SIGNAL_INSTANCE_READY,
 )
 from .coordinator import HyperHdrInstanceCoordinator, HyperHdrRuntimeData, HyperHdrServerCoordinator, _diff_instances
-from .entity import server_uid
+from .entity import server_device_info, server_uid
 from .models import HyperHdrServerData
 
 if TYPE_CHECKING:
@@ -225,6 +225,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: HyperHdrConfigEntry) -> 
         instance_coordinators={},
         default_priority=options.get(OPT_DEFAULT_PRIORITY, DEFAULT_PRIORITY),
         hidden_effects=set(options.get(OPT_HIDDEN_EFFECTS, [])),
+    )
+
+    # Explicitly register the server device before any entities exist --
+    # instance-scoped entities' via_device points at it, and
+    # async_forward_entry_setups sets platforms up concurrently, so nothing
+    # otherwise guarantees a server-scoped entity (whose own device_info
+    # would incidentally create it) gets added first. Idempotent -- a later
+    # `HyperHdrServerEntity` (e.g. sensor.py's version sensor) resolves to
+    # the same device via the same identifiers.
+    dr.async_get(hass).async_get_or_create(
+        config_entry_id=entry.entry_id, **server_device_info(server_coordinator, entry)
     )
 
     running_ids = [instance_id for instance_id, summary in roster.items() if summary.running]

@@ -378,6 +378,14 @@ class FakeDeviceRegistry:
         self.removed.append(device_id)
         self.devices.pop(device_id, None)
 
+    def async_get_or_create(
+        self, *, config_entry_id: str, identifiers: set[tuple[str, str]], **_kwargs: Any
+    ) -> FakeDeviceEntry:
+        existing = self.async_get_device(identifiers)
+        if existing is not None:
+            return existing
+        return self.add(f"device-{len(self.devices)}", identifiers)
+
 
 class _FakeConfigEntriesManager:
     """Stand-in for ``hass.config_entries``."""
