@@ -259,6 +259,32 @@ class HyperHdrServerData:
         return {summary.instance: summary for summary in summaries}
 
 
+# --- LED layout geometry (Phase 7+8 -- camera.py) -----------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class HyperHdrLedGeometry:
+    """One LED's fractional rectangle within the physical layout
+    (``serverinfo.info.leds[]`` -- see docs/api-notes.md), used by camera.py
+    to render the LED layout onto a canvas. Fractions are of the whole
+    layout (0.0-1.0), not pixels."""
+
+    hmin: float
+    hmax: float
+    vmin: float
+    vmax: float
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> Self:
+        """Build from a single ``leds[]`` entry."""
+        return cls(
+            hmin=_as_optional_float(data.get("hmin")) or 0.0,
+            hmax=_as_optional_float(data.get("hmax")) or 0.0,
+            vmin=_as_optional_float(data.get("vmin")) or 0.0,
+            vmax=_as_optional_float(data.get("vmax")) or 0.0,
+        )
+
+
 # --- instance-scoped snapshot -----------------------------------------------------------------
 
 
@@ -281,6 +307,9 @@ class HyperHdrInstanceData:
     video_mode: str
     hdr_mode: int
     connected: bool
+    # Defaulted (Phase 7+8 addition, after every other field) so existing
+    # call sites that don't care about LED geometry need no changes.
+    led_geometry: tuple[HyperHdrLedGeometry, ...] = ()
 
     @classmethod
     def from_serverinfo(cls, instance_id: int, info: dict[str, Any]) -> Self:
@@ -295,6 +324,7 @@ class HyperHdrInstanceData:
 
         leds = info.get("leds")
         led_count = len(leds) if isinstance(leds, list) else 0
+        led_geometry = tuple(HyperHdrLedGeometry.from_dict(e) for e in _as_dict_list(leds))
 
         video_mode = ""
         grabbers = info.get("grabbers")
@@ -314,6 +344,7 @@ class HyperHdrInstanceData:
             video_mode=video_mode,
             hdr_mode=_as_int(info.get("videomodehdr")),
             connected=True,
+            led_geometry=led_geometry,
         )
 
     def apply_components_update(self, data: dict[str, Any]) -> Self:

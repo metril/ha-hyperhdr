@@ -295,12 +295,20 @@ class FakeConfigEntry:
         title: str = "HyperHDR",
         data: dict[str, Any] | None = None,
         options: dict[str, Any] | None = None,
+        domain: str = "hyperhdr",
+        state: str = "not_loaded",
     ) -> None:
         self.entry_id = entry_id
         self.unique_id = unique_id
         self.title = title
         self.data = data or {}
         self.options = options or {}
+        self.domain = domain
+        # Only meaningful to _FakeConfigEntriesManager.async_loaded_entries
+        # (services.py's last-entry-unload check) -- a test that cares sets
+        # this directly and registers the entry into
+        # hass.config_entries.entries; nothing else in this stub reads it.
+        self.state = state
         self.update_listeners: list[Callable[..., Any]] = []
         self.on_unload_callbacks: list[Callable[[], Any]] = []
         self.reauth_started = False
@@ -374,6 +382,11 @@ class FakeDeviceRegistry:
                 return entry
         return None
 
+    def async_get(self, device_id: str) -> FakeDeviceEntry | None:
+        """Look up by device id (matches the real DeviceRegistry.async_get --
+        distinct from async_get_device, which looks up by identifiers)."""
+        return self.devices.get(device_id)
+
     def async_remove_device(self, device_id: str) -> None:
         self.removed.append(device_id)
         self.devices.pop(device_id, None)
@@ -388,12 +401,21 @@ class FakeDeviceRegistry:
 
 
 class _FakeConfigEntriesManager:
-    """Stand-in for ``hass.config_entries``."""
+    """Stand-in for ``hass.config_entries``.
+
+    ``entries`` is a plain list a test populates directly (mirroring how the
+    real registry already knows about every config entry before
+    ``async_setup_entry``/``async_unload_entry`` ever run) -- production
+    code never appends to it itself, only reads via ``async_entries``/
+    ``async_loaded_entries`` (used by services.py's last-entry-unload
+    unregistration).
+    """
 
     def __init__(self) -> None:
         self.forward_calls: list[tuple[Any, list[Any]]] = []
         self.unload_calls: list[tuple[Any, list[Any]]] = []
         self.reload_calls: list[str] = []
+        self.entries: list[Any] = []
 
     async def async_forward_entry_setups(self, entry: Any, platforms: Iterable[Any]) -> None:
         self.forward_calls.append((entry, list(platforms)))
@@ -404,6 +426,65 @@ class _FakeConfigEntriesManager:
 
     async def async_reload(self, entry_id: str) -> None:
         self.reload_calls.append(entry_id)
+
+    def async_entries(self, domain: str | None = None) -> list[Any]:
+        if domain is None:
+            return list(self.entries)
+        return [e for e in self.entries if getattr(e, "domain", None) == domain]
+
+    def async_loaded_entries(self, domain: str | None = None) -> list[Any]:
+        return [e for e in self.async_entries(domain) if getattr(e, "state", "not_loaded") == "loaded"]
+
+    def async_get_entry(self, entry_id: str) -> Any:
+        return next((e for e in self.entries if e.entry_id == entry_id), None)
+
+
+class FakeServiceRegistration:
+    """A registered service handler + its optional schema."""
+
+    def __init__(self, handler: Callable[..., Any], schema: Any = None, supports_response: Any = None) -> None:
+        self.handler = handler
+        self.schema = schema
+        self.supports_response = supports_response
+
+
+class FakeServiceCall:
+    """Stand-in for ``homeassistant.core.ServiceCall``."""
+
+    def __init__(self, hass: FakeHass, domain: str, service: str, data: dict[str, Any]) -> None:
+        self.hass = hass
+        self.domain = domain
+        self.service = service
+        self.data = data
+
+
+class FakeServices:
+    """Stand-in for ``hass.services``."""
+
+    def __init__(self, hass: FakeHass) -> None:
+        self._hass = hass
+        self._services: dict[tuple[str, str], FakeServiceRegistration] = {}
+
+    def has_service(self, domain: str, service: str) -> bool:
+        return (domain, service) in self._services
+
+    def async_register(
+        self, domain: str, service: str, handler: Callable[..., Any], schema: Any = None, **kwargs: Any
+    ) -> None:
+        self._services[(domain, service)] = FakeServiceRegistration(handler, schema, kwargs.get("supports_response"))
+
+    def async_remove(self, domain: str, service: str) -> None:
+        self._services.pop((domain, service), None)
+
+    async def async_call(
+        self, domain: str, service: str, service_data: dict[str, Any] | None = None, blocking: bool = True
+    ) -> Any:
+        registration = self._services[(domain, service)]
+        payload = dict(service_data or {})
+        if registration.schema is not None:
+            payload = registration.schema(payload)
+        call = FakeServiceCall(self._hass, domain, service, payload)
+        return await registration.handler(call)
 
 
 class FakeHass:
@@ -421,6 +502,7 @@ class FakeHass:
         self.config_entries = _FakeConfigEntriesManager()
         self.entity_registry = FakeEntityRegistry()
         self.device_registry = FakeDeviceRegistry()
+        self.services = FakeServices(self)
         self.client_session = object()
         self.insecure_client_session = object()
         self.dispatcher_calls: dict[str, list[tuple[Any, ...]]] = {}
@@ -587,8 +669,15 @@ def _stub_homeassistant() -> None:
         SENSOR = "sensor"
         NUMBER = "number"
         BUTTON = "button"
+        CAMERA = "camera"
 
-    ha_const = _make_module("homeassistant.const", Platform=_Platform, CONF_HOST="host", CONF_PORT="port")
+    ha_const = _make_module(
+        "homeassistant.const",
+        Platform=_Platform,
+        CONF_HOST="host",
+        CONF_PORT="port",
+        CONTENT_TYPE_MULTIPART="multipart/x-mixed-replace; boundary={}",
+    )
     ha.const = ha_const
 
     class ConfigEntryNotReady(Exception):
@@ -597,11 +686,15 @@ def _stub_homeassistant() -> None:
     class ConfigEntryAuthFailed(Exception):
         pass
 
+    class ServiceValidationError(Exception):
+        pass
+
     ha_exc = _make_module(
         "homeassistant.exceptions",
         ConfigEntryNotReady=ConfigEntryNotReady,
         ConfigEntryAuthFailed=ConfigEntryAuthFailed,
         HomeAssistantError=Exception,
+        ServiceValidationError=ServiceValidationError,
     )
     ha.exceptions = ha_exc
 
@@ -872,6 +965,59 @@ def _stub_homeassistant() -> None:
 
     ha_button = _make_module("homeassistant.components.button", ButtonEntity=ButtonEntity)
 
+    # --- camera platform stub (Phase 7+8) -----------------------------------
+    #
+    # Lean stand-in for homeassistant.components.camera.Camera: just enough
+    # state (access_tokens/content_type/stream) to construct without
+    # crashing -- camera.py's own async_camera_image/handle_async_mjpeg_stream
+    # overrides are what tests actually exercise; this base's own bodies are
+    # never reached through our subclasses.
+    import collections as _collections
+
+    class Camera:
+        _attr_frame_interval = 0.5
+        _attr_brand: str | None = None
+        _attr_supported_features = 0
+
+        def __init__(self) -> None:
+            self.access_tokens: _collections.deque[str] = _collections.deque(["token"], 2)
+            self.content_type = "image/jpeg"
+            self.stream = None
+
+        async def async_camera_image(self, width: int | None = None, height: int | None = None) -> bytes | None:
+            return None
+
+        async def handle_async_mjpeg_stream(self, request: Any) -> Any:
+            return None
+
+    ha_camera = _make_module("homeassistant.components.camera", Camera=Camera)
+
+    # --- diagnostics stub (Phase 7+8) ---------------------------------------
+    #
+    # Faithful (not just a passthrough) reimplementation of the real
+    # async_redact_data -- diagnostics.py's whole job is redaction, so a
+    # stub that didn't actually redact would make its tests meaningless.
+
+    _REDACTED = "**REDACTED**"
+
+    def _async_redact_data(data: Any, to_redact: Any) -> Any:
+        if isinstance(data, list):
+            return [_async_redact_data(item, to_redact) for item in data]
+        if not isinstance(data, dict):
+            return data
+        redacted = dict(data)
+        to_redact_set = set(to_redact)
+        for key, value in redacted.items():
+            if value is None or value == "":
+                continue
+            if key in to_redact_set:
+                redacted[key] = _REDACTED
+            elif isinstance(value, (dict, list)):
+                redacted[key] = _async_redact_data(value, to_redact)
+        return redacted
+
+    ha_diagnostics = _make_module("homeassistant.components.diagnostics", async_redact_data=_async_redact_data)
+
     ha_components = _make_module(
         "homeassistant.components",
         light=ha_light,
@@ -880,6 +1026,8 @@ def _stub_homeassistant() -> None:
         sensor=ha_sensor,
         number=ha_number,
         button=ha_button,
+        camera=ha_camera,
+        diagnostics=ha_diagnostics,
     )
     ha.components = ha_components
 
@@ -903,6 +1051,8 @@ def _stub_homeassistant() -> None:
     sys.modules["homeassistant.components.sensor"] = ha_sensor
     sys.modules["homeassistant.components.number"] = ha_number
     sys.modules["homeassistant.components.button"] = ha_button
+    sys.modules["homeassistant.components.camera"] = ha_camera
+    sys.modules["homeassistant.components.diagnostics"] = ha_diagnostics
 
 
 _stub_homeassistant()

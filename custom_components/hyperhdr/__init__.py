@@ -55,7 +55,6 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
-# Camera (a later phase) will extend this.
 PLATFORMS: list[Platform] = [
     Platform.LIGHT,
     Platform.SWITCH,
@@ -63,6 +62,7 @@ PLATFORMS: list[Platform] = [
     Platform.SENSOR,
     Platform.NUMBER,
     Platform.BUTTON,
+    Platform.CAMERA,
 ]
 
 # Extra headroom over the client's own request_timeout for the first-connect

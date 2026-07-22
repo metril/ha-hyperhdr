@@ -268,6 +268,17 @@ class TestHyperHdrInstanceDataFromServerinfo:
         assert instance_data.led_count == len(raw["info"]["leds"])
         assert instance_data.led_count == 1
 
+    def test_led_geometry_parses_fractional_rectangle(self) -> None:
+        raw = load_fixture("serverinfo_single_instance.json")
+        instance_data = HyperHdrInstanceData.from_serverinfo(0, raw["info"])
+        assert len(instance_data.led_geometry) == 1
+        led = instance_data.led_geometry[0]
+        assert (led.hmin, led.hmax, led.vmin, led.vmax) == (0.0, 1.0, 0.0, 0.08)
+
+    def test_led_geometry_empty_when_no_leds_key(self) -> None:
+        instance_data = HyperHdrInstanceData.from_serverinfo(0, {})
+        assert instance_data.led_geometry == ()
+
     def test_hdr_mode_is_bare_int(self) -> None:
         raw = load_fixture("serverinfo_single_instance.json")
         instance_data = HyperHdrInstanceData.from_serverinfo(0, raw["info"])
