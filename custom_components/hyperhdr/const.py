@@ -17,6 +17,15 @@ DEFAULT_PORT = 8090
 DEFAULT_PRIORITY = 128
 DEFAULT_ORIGIN = "Home Assistant"
 DEFAULT_REQUEST_TIMEOUT = 10.0
+# NOTE (Phase 5+6, confirmed live): client.py currently does NOT forward
+# this to aiohttp's ws_connect(heartbeat=...) -- this HyperHDR docker
+# image's WS server replies to a low-level PING with a malformed fragmented
+# control frame, which aiohttp correctly force-closes the connection over
+# per RFC 6455, reproducing every `heartbeat` seconds. Kept as a config
+# option (constructor param, OPT_HEARTBEAT) for backwards compatibility and
+# in case a future/different HyperHDR build handles it correctly, but it is
+# a no-op today; DEFAULT_STALE_TIMEOUT's rx-staleness watchdog is the
+# active liveness mechanism. See client.py's _connect_once for the full note.
 DEFAULT_HEARTBEAT = 30.0
 DEFAULT_STALE_TIMEOUT = 90.0
 RECONNECT_BASE_DELAY = 2.0

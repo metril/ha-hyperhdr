@@ -183,7 +183,19 @@ class HyperHdrBaseClient:
             await self._sleep(delay)
 
     async def _connect_once(self) -> None:
-        ws = await self._session.ws_connect(self.ws_url, heartbeat=self._heartbeat)
+        # heartbeat intentionally NOT forwarded to aiohttp's ws_connect
+        # (self._heartbeat is accepted for backwards-compatible construction/
+        # options but otherwise currently unused) -- confirmed live, Phase
+        # 5+6: this server's reply to aiohttp's low-level PING is a
+        # malformed fragmented control frame, which aiohttp correctly
+        # rejects per RFC 6455 by force-closing the connection, reproducing
+        # every `heartbeat` seconds like clockwork (root-caused with a raw
+        # aiohttp probe against hyperhdr-dev; matches the "sent 1002
+        # fragmented control frame" gotcha docs/api-notes.md already noted
+        # for ledstream). The existing rx-staleness `_watchdog` below
+        # already provides equivalent liveness detection without depending
+        # on WS-level ping/pong, so nothing is lost by disabling this.
+        ws = await self._session.ws_connect(self.ws_url, heartbeat=None)
         self._ws = ws
         self._tan_counter = itertools.count(1)
         self._pending = {}
@@ -403,7 +415,11 @@ class HyperHdrServerClient(HyperHdrBaseClient):
         caller can distinguish "token required" from other auth failures)
         or ``HyperHdrConnectionError`` on any transport failure.
         """
-        ws = await self._session.ws_connect(self.ws_url, heartbeat=self._heartbeat)
+        # heartbeat intentionally NOT forwarded to aiohttp -- see
+        # _connect_once's identical call for why (this probe is short-lived
+        # enough that it wouldn't normally hit the heartbeat interval
+        # anyway, but consistency avoids surprises if that ever changes).
+        ws = await self._session.ws_connect(self.ws_url, heartbeat=None)
         self._ws = ws
         self._tan_counter = itertools.count(1)
         self._pending = {}
