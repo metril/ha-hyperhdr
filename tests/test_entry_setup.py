@@ -12,6 +12,7 @@ doesn't rely on a fake clock.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -258,6 +259,52 @@ class TestServerReconnectViaOnConnected:
         assert 1 in runtime.instance_coordinators
         assert instance2_client.stop_calls == 1
         assert runtime.server_coordinator.data.instances.keys() == {1}
+
+
+class TestServerDisconnectViaOnDisconnected:
+    async def test_server_only_disconnect_leaves_unaffected_instance_connected(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression: a server-socket-only disconnect (the instance's own
+        socket never dropped) must not strand that instance's entities
+        unavailable -- the roster is unchanged across a server-only outage,
+        so nothing would ever flip the instance coordinator back to
+        connected=True if the server disconnect cascaded onto it. The SAME
+        on_disconnected callback wired at setup time is exercised here (not
+        a helper in isolation), mirroring
+        TestServerReconnectViaOnConnected's approach for on_connected."""
+        hass = FakeHass()
+        entry = _entry()
+        clients = _patch_server_client(
+            monkeypatch,
+            connect_info={"instance": [{"instance": 1, "friendly_name": "First", "running": True}]},
+        )
+
+        async def _fake_instance_factory(hass: Any, entry: Any, instance_id: int) -> FakeInstanceClient:
+            return FakeInstanceClient(instance_id)
+
+        monkeypatch.setattr(hyperhdr, "_async_create_instance_client", _fake_instance_factory)
+
+        await hyperhdr.async_setup_entry(hass, entry)  # type: ignore[arg-type]
+        runtime = entry.runtime_data  # type: ignore[attr-defined]
+        instance_coordinator = runtime.instance_coordinators[1]
+        # Simulate the instance's own client having connected successfully
+        # (its socket is independent of the server client's).
+        instance_coordinator.async_set_updated_data(replace(instance_coordinator.data, connected=True))
+
+        server_client = clients[0]
+        server_client.on_disconnected()
+
+        assert runtime.server_coordinator.data.connected is False
+        assert instance_coordinator.data.connected is True
+
+        # A reconnect afterward must not have anything to "restore" on the
+        # instance side -- it was never touched.
+        server_client.sysinfo_result = HyperHdrSysInfo(id="dev", hostname="hyperhdr-host", version="22", build="b")
+        await server_client.on_connected({"instance": [{"instance": 1, "friendly_name": "First", "running": True}]})
+
+        assert runtime.server_coordinator.data.connected is True
+        assert instance_coordinator.data.connected is True
 
 
 class TestAsyncCreateInstanceClientAuthFailed:

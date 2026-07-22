@@ -164,14 +164,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: HyperHdrConfigEntry) -> 
         await _async_handle_instance_diff(hass, entry, roster)
 
     def _handle_disconnected() -> None:
+        """Mark the SERVER data disconnected only -- deliberately NOT
+        cascaded onto instance coordinators.
+
+        Each instance client owns its own socket, keepalive, and staleness
+        watchdog (see client.py's ``HyperHdrBaseClient``) and detects its
+        own outages independently within its own staleness window; a
+        server-socket-only reconnect (the server client's socket dropped,
+        every instance socket didn't) must not strand an unaffected
+        instance's entities as permanently unavailable, since nothing would
+        ever flip them back to ``connected=True`` -- the roster is
+        unchanged, so ``_diff_instances`` never reports that instance as
+        ``started`` to trigger a refresh. A whole-server outage (e.g. the
+        HyperHDR process itself restarting) takes every instance socket
+        down anyway, and each one's own ``on_disconnected`` handles that.
+        """
         if not hasattr(entry, "runtime_data"):
             return
         runtime = entry.runtime_data
         if runtime.server_coordinator.data is not None:
             runtime.server_coordinator.async_set_updated_data(replace(runtime.server_coordinator.data, connected=False))
-        for instance_coordinator in runtime.instance_coordinators.values():
-            if instance_coordinator.data is not None:
-                instance_coordinator.async_set_updated_data(replace(instance_coordinator.data, connected=False))
 
     def _handle_auth_failed() -> None:
         nonlocal auth_failed_during_setup
@@ -246,11 +258,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: HyperHdrConfigEntry) -> 
         config_entry_id=entry.entry_id, **server_device_info(server_coordinator, entry)
     )
 
+    # Held for the whole initial-instance startup burst below, not just a
+    # single call -- the same lock a later push-triggered reconciliation
+    # (_async_handle_instance_diff) acquires, so a push landing in the
+    # narrow window after runtime_data is assigned (above) but before this
+    # burst finishes blocks until it's done rather than racing it to
+    # double-create a client/coordinator for the same instance id.
     running_ids = [instance_id for instance_id, summary in roster.items() if summary.running]
-    results = await asyncio.gather(
-        *(_async_start_instance(hass, entry, instance_id) for instance_id in running_ids),
-        return_exceptions=True,
-    )
+    async with _get_diff_lock(entry.entry_id):
+        results = await asyncio.gather(
+            *(_async_start_instance(hass, entry, instance_id) for instance_id in running_ids),
+            return_exceptions=True,
+        )
     for instance_id, result in zip(running_ids, results, strict=True):
         if isinstance(result, BaseException):
             _LOGGER.warning("failed to connect to instance %s during setup: %s", instance_id, result)
@@ -297,6 +316,12 @@ async def _async_start_instance(hass: HomeAssistant, entry: HyperHdrConfigEntry,
     A brand-new instance gets a fresh coordinator (seeded + SIGNAL_INSTANCE_READY
     fired exactly once, at creation); an instance restarting reuses its existing,
     persistent coordinator -- only a fresh client is created and attached.
+
+    Invariant: every caller must hold ``_get_diff_lock(entry.entry_id)``
+    across the call -- both call sites do (``_async_handle_instance_diff``
+    for reconnects/roster pushes, the initial startup burst in
+    ``async_setup_entry``) -- so two overlapping calls for the same
+    ``instance_id`` can never race to double-create its coordinator.
     """
     runtime = entry.runtime_data
     client = await _async_create_instance_client(hass, entry, instance_id)
