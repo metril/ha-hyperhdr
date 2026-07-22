@@ -187,3 +187,64 @@ class TestStartInstanceSyntheticPush:
         assert pushes[0]["command"] == "instance-update"
         assert pushes[0]["data"] == roster
         await client.stop()
+
+    async def test_create_instance_sends_name_and_triggers_synthetic_roster_refresh(self) -> None:
+        ws = FakeWebSocket(build_connect_script(admin_password="hyperhdr"))
+        session = FakeClientSession(ws)
+        client = HyperHdrServerClient(session, "localhost", 8090, admin_password="hyperhdr")  # type: ignore[arg-type]
+
+        pushes: list[dict[str, Any]] = []
+        client.set_push_callback("instance-update", pushes.append)
+
+        await client.start()
+        await wait_until(lambda: client.connected)
+
+        task = asyncio.ensure_future(client.create_instance("New Instance"))
+        await wait_until(lambda: len(ws.sent) >= 4)
+        create_sent = ws.sent[-1]
+        assert create_sent["command"] == "instance"
+        assert create_sent["subcommand"] == "createInstance"
+        assert create_sent["name"] == "New Instance"
+        ws.push({"command": "instance-createInstance", "success": True, "tan": create_sent["tan"]})
+
+        await wait_until(lambda: len(ws.sent) >= 5)
+        serverinfo_tan = ws.sent[-1]["tan"]
+        roster = [
+            {"instance": 0, "friendly_name": "First LED instance", "running": True},
+            {"instance": 1, "friendly_name": "New Instance", "running": False},
+        ]
+        ws.push({"command": "serverinfo", "success": True, "tan": serverinfo_tan, "info": {"instance": roster}})
+
+        await task
+        assert len(pushes) == 1
+        assert pushes[0]["data"] == roster
+        await client.stop()
+
+    async def test_delete_instance_sends_instance_id_and_triggers_synthetic_roster_refresh(self) -> None:
+        ws = FakeWebSocket(build_connect_script(admin_password="hyperhdr"))
+        session = FakeClientSession(ws)
+        client = HyperHdrServerClient(session, "localhost", 8090, admin_password="hyperhdr")  # type: ignore[arg-type]
+
+        pushes: list[dict[str, Any]] = []
+        client.set_push_callback("instance-update", pushes.append)
+
+        await client.start()
+        await wait_until(lambda: client.connected)
+
+        task = asyncio.ensure_future(client.delete_instance(1))
+        await wait_until(lambda: len(ws.sent) >= 4)
+        delete_sent = ws.sent[-1]
+        assert delete_sent["command"] == "instance"
+        assert delete_sent["subcommand"] == "deleteInstance"
+        assert delete_sent["instance"] == 1
+        ws.push({"command": "instance-deleteInstance", "success": True, "tan": delete_sent["tan"]})
+
+        await wait_until(lambda: len(ws.sent) >= 5)
+        serverinfo_tan = ws.sent[-1]["tan"]
+        roster = [{"instance": 0, "friendly_name": "First LED instance", "running": True}]
+        ws.push({"command": "serverinfo", "success": True, "tan": serverinfo_tan, "info": {"instance": roster}})
+
+        await task
+        assert len(pushes) == 1
+        assert pushes[0]["data"] == roster
+        await client.stop()

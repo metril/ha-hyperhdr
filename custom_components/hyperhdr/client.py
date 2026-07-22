@@ -412,6 +412,42 @@ class HyperHdrServerClient(HyperHdrBaseClient):
         """
         await self._send_command("instance", subcommand="stopInstance", instance=instance_id)
 
+    async def create_instance(self, name: str) -> None:
+        """Create a new (not-running) instance with friendly name ``name``.
+
+        ``createInstance`` requires an admin login on HyperHDR v22 (verified
+        live -- see docs/api-notes.md); the command is always sent, and a
+        rejection (e.g. no admin login) surfaces as ``HyperHdrApiError`` via
+        the existing ``success: false`` path -- this method does not
+        preemptively check ``admin_logged_in``.
+
+        A live re-probe found ``createInstance`` does not reliably push an
+        ``instance-update`` on its own (contradicting the earlier docs/api-
+        notes.md recon) -- like ``start_instance``, a fresh ``serverinfo``
+        roster is fetched and fed to the ``instance-update`` push callback
+        as a synthetic push.
+        """
+        await self._send_command("instance", subcommand="createInstance", name=name)
+        response = await self._send_command("serverinfo", subscribe=list(self._subscriptions))
+        info = response.get("info")
+        roster = info.get("instance", []) if isinstance(info, dict) else []
+        self._dispatch_push("instance-update", {"command": "instance-update", "data": roster})
+
+    async def delete_instance(self, instance_id: int) -> None:
+        """Delete an existing instance.
+
+        Grouped with ``createInstance`` as admin-gated in docs/api-notes.md
+        (not independently re-verified); sent unconditionally like every
+        other instance-lifecycle command here, letting a rejection surface
+        as ``HyperHdrApiError``. Synthesizes a roster-refresh push for the
+        same reason as ``create_instance``/``start_instance``.
+        """
+        await self._send_command("instance", subcommand="deleteInstance", instance=instance_id)
+        response = await self._send_command("serverinfo", subscribe=list(self._subscriptions))
+        info = response.get("info")
+        roster = info.get("instance", []) if isinstance(info, dict) else []
+        self._dispatch_push("instance-update", {"command": "instance-update", "data": roster})
+
 
 class HyperHdrInstanceClient(HyperHdrBaseClient):
     """A client parked on a single HyperHDR instance via ``switchTo``."""
