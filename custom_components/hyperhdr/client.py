@@ -74,7 +74,7 @@ _MAX_BACKOFF_ATTEMPT = 20
 
 def _backoff_delay(attempt: int) -> float:
     """The deterministic (pre-jitter) reconnect backoff delay for `attempt`."""
-    return min(RECONNECT_BASE_DELAY * (2 ** min(attempt, _MAX_BACKOFF_ATTEMPT)), RECONNECT_MAX_DELAY)
+    return float(min(RECONNECT_BASE_DELAY * (2 ** min(attempt, _MAX_BACKOFF_ATTEMPT)), RECONNECT_MAX_DELAY))
 
 
 class HyperHdrBaseClient:

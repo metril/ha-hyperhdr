@@ -214,9 +214,7 @@ class TestKeepalive:
         # test's pre-scripted response sequence. Giving the handshake a
         # full extra tick of headroom avoids that without weakening what
         # this test actually verifies.
-        client = _make_client(
-            session, clock, monkeypatch, heartbeat=20.0, stale_timeout=30.0, request_timeout=0.1
-        )
+        client = _make_client(session, clock, monkeypatch, heartbeat=20.0, stale_timeout=30.0, request_timeout=0.1)
 
         await client.start()
         await wait_until(lambda: client.connected)
@@ -252,7 +250,8 @@ class TestKeepalive:
         class _TrafficClock(FakeClock):
             async def sleep(self, seconds: float) -> None:
                 await super().sleep(seconds)
-                first_ws_holder[0].push({"command": "components-update", "data": {"name": "SMOOTHING", "enabled": True}})
+                frame = {"command": "components-update", "data": {"name": "SMOOTHING", "enabled": True}}
+                first_ws_holder[0].push(frame)
                 # A couple of extra cooperative turns so the receive loop
                 # actually consumes the just-pushed frame (stamping
                 # `_last_rx`) before the watchdog's own next line re-checks
