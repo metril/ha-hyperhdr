@@ -7,8 +7,8 @@ Home Assistant custom integration for [HyperHDR](https://github.com/awawa-dev/Hy
 
 ```
 custom_components/hyperhdr/
-├── __init__.py        (391)  Entry setup/teardown, dynamic instance lifecycle diffing, session wiring, service (un)registration
-├── client.py           (763)  ALL WebSocket/JSON-RPC transport (only file importing aiohttp for the wire protocol) -- connect/auth/reconnect/watchdog + server/instance clients + ledstream fan-out
+├── __init__.py        (416)  Entry setup/teardown, dynamic instance lifecycle diffing, session wiring, service (un)registration
+├── client.py           (773)  ALL WebSocket/JSON-RPC transport (only file importing aiohttp for the wire protocol) -- connect/auth/reconnect/watchdog + server/instance clients + ledstream fan-out
 ├── const.py             (123)  Domain, config/option keys, defaults, subscription topics, component labels, dispatcher signal names
 ├── coordinator.py       (243)  HyperHdrServerCoordinator + HyperHdrInstanceCoordinator (push-only, update_interval=None), instance roster diffing
 ├── entity.py             (195)  Server-scoped/instance-scoped entity bases, device_info builders, wait_for_connected_data
@@ -16,7 +16,7 @@ custom_components/hyperhdr/
 ├── flow_support.py       (278)  Pure config-flow support: connection validation, SSDP location parsing, voluptuous schema builders (no HA flow-manager imports -- unit testable directly)
 ├── config_flow.py        (340)  ConfigFlow/OptionsFlow orchestration: user/ssdp/auth/admin/reauth/reconfigure/options steps
 ├── models.py             (389)  Typed dataclasses parsed defensively from HyperHDR wire payloads
-├── diagnostics.py         (77)  Config entry diagnostics with secret/identity redaction
+├── diagnostics.py         (81)  Config entry diagnostics with secret/identity redaction
 ├── services.py           (185)  Device-targeted set_color/set_effect/clear service registration + handlers
 ├── services.yaml           (68)  HA service field/selector definitions (mirrors services.py's schemas)
 ├── light.py              (162)  Primary per-instance RGB light entity
@@ -38,7 +38,7 @@ tests/
 ├── test_client_reconnect.py (400)  Reconnect supervisor (backoff/jitter), staleness watchdog, synthetic instance-lifecycle roster pushes
 ├── test_client_auth.py    (259)  Connect-time auth handshake: tokenRequired/login/admin
 ├── test_coordinator_instances.py (419)  Instance-lifecycle diff logic and its orchestration
-├── test_entry_setup.py    (321)  async_setup_entry/async_unload_entry: session selection, first-connect wait, reauth-during-setup
+├── test_entry_setup.py    (368)  async_setup_entry/async_unload_entry: session selection, first-connect wait, reauth-during-setup
 ├── test_models.py         (363)  HyperHDR data models against real captured wire fixtures
 ├── test_flow_support.py   (237)  Pure config-flow support: validation outcomes, SSDP parsing, schema shapes
 ├── test_light.py          (323)  State mapping and turn_on/turn_off command selection
@@ -47,7 +47,7 @@ tests/
 ├── test_number.py         (208)  Presence-based entity creation and single-field adjustment writes
 ├── test_services.py       (218)  Device-target resolution helper and the three service handlers
 ├── test_camera.py         (207)  Pure render helpers (geometry+frame -> image) and the LED-geometry entity-creation guard
-├── test_diagnostics.py    (177)  Redaction coverage and diagnostics payload shape
+├── test_diagnostics.py    (185)  Redaction coverage and diagnostics payload shape
 ├── test_entity_bases.py   (155)  Server/instance base entity classes
 ├── test_sensor.py         (139)  value_fn/attrs_fn evaluation for each sensor description
 ├── test_button.py          (70)  Press behavior and error wrapping
@@ -101,6 +101,7 @@ HyperHdrServerCoordinator          HyperHdrInstanceCoordinator x N
 - **Unique ID formats:** server-scoped `{server_uid}_{key}`; instance-scoped `{server_uid}_{instance_id}_{key}`. `server_uid` is the config entry's `unique_id` (the server's own sysinfo `id`), falling back to `entry_id` for entries/tests that predate one.
 - **`from __future__ import annotations`** at the top of every module, project-wide.
 - **No admin-gating assumptions baked in as blanket rules.** Whether a given HyperHDR command needs an admin login varies by command (and possibly by version) and is verified live per-command, not assumed -- see the docstrings on `client.py`'s instance-lifecycle/stream methods.
+- **`client.py`'s `create_instance`/`delete_instance` are reserved for future use.** Transport-layer support exists (and is tested) but nothing HA-facing (service, config flow, UI action) calls them yet -- intentional, not dead code to prune.
 
 ## Rules
 

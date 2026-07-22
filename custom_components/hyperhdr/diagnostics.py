@@ -4,7 +4,11 @@ Redacts anything that could identify or grant access to the physical
 server: the API token, admin password, the config entry's own ``host``/
 ``unique_id``, and ``sysinfo``'s ``id`` field -- which IS the same value as
 ``unique_id`` (see ``entity.py``'s ``server_uid``), just surfaced a second
-time inside the payload built below.
+time inside the payload built below. ``sysinfo``'s ``hostname`` and the
+config entry's ``title`` are likewise the same value as each other (the
+config flow seeds the entry title from the server's hostname -- see
+``config_flow.py``) and both identify the physical server, so both are
+redacted too.
 """
 
 from __future__ import annotations
@@ -19,7 +23,7 @@ if TYPE_CHECKING:
 
     from .coordinator import HyperHdrConfigEntry, HyperHdrInstanceCoordinator
 
-TO_REDACT = {"token", "admin_password", "password", "host", "unique_id", "id"}
+TO_REDACT = {"token", "admin_password", "password", "host", "unique_id", "id", "hostname", "title"}
 
 
 async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: HyperHdrConfigEntry) -> dict[str, Any]:

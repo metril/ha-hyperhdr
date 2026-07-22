@@ -521,6 +521,12 @@ class HyperHdrServerClient(HyperHdrBaseClient):
     async def create_instance(self, name: str) -> None:
         """Create a new (not-running) instance with friendly name ``name``.
 
+        Reserved for future use: no HA-facing caller (no service, no config
+        flow step) wires this up yet -- it's exercised directly by its own
+        client-level tests only. Kept because the transport-layer support is
+        cheap and correct today; deliberately not building a UI/service
+        around it until there's an actual feature request for it.
+
         ``createInstance`` requires an admin login on HyperHDR v22 (verified
         live -- see docs/api-notes.md); the command is always sent, and a
         rejection (e.g. no admin login) surfaces as ``HyperHdrApiError`` via
@@ -541,6 +547,10 @@ class HyperHdrServerClient(HyperHdrBaseClient):
 
     async def delete_instance(self, instance_id: int) -> None:
         """Delete an existing instance.
+
+        Reserved for future use, same as ``create_instance`` above: no
+        HA-facing caller wires this up yet (no service, no UI action) --
+        intentional, not an oversight.
 
         Grouped with ``createInstance`` as admin-gated in docs/api-notes.md
         (not independently re-verified); sent unconditionally like every

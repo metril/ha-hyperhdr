@@ -29,6 +29,9 @@ _HOST = "10.20.30.40"
 _TOKEN = "super-secret-token"  # noqa: S105
 _ADMIN_PASSWORD = "hunter2"  # noqa: S105
 _SYSINFO_ID = "hyperhdr-device-uid-1234"
+# The config flow seeds the entry title from sysinfo's hostname (see
+# config_flow.py), so both carry the same value here, as they would live.
+_HOSTNAME = "living-room-hyperhdr"
 
 
 class _FakeInstanceClient:
@@ -59,6 +62,7 @@ def _make_entry_with_runtime_data() -> FakeConfigEntry:
     entry = FakeConfigEntry(
         entry_id="entry1",
         unique_id=_SYSINFO_ID,
+        title=_HOSTNAME,
         data={
             "host": _HOST,
             "port": 8090,
@@ -71,7 +75,7 @@ def _make_entry_with_runtime_data() -> FakeConfigEntry:
     server_coordinator = HyperHdrServerCoordinator(hass, entry, object())  # type: ignore[arg-type]
     server_coordinator.async_set_updated_data(
         HyperHdrServerData(
-            sysinfo=HyperHdrSysInfo(id=_SYSINFO_ID, hostname="living-room-hyperhdr", version="22.0.0", build="b1"),
+            sysinfo=HyperHdrSysInfo(id=_SYSINFO_ID, hostname=_HOSTNAME, version="22.0.0", build="b1"),
             instances={0: HyperHdrInstanceSummary(instance=0, friendly_name="Living Room", running=True)},
             connected=True,
         )
@@ -123,7 +127,7 @@ def _find_secret_strings(value: Any) -> list[str]:
     matching how the live-validation checklist greps the real endpoint's
     response body."""
     haystack = json.dumps(value)
-    return [secret for secret in (_TOKEN, _ADMIN_PASSWORD, _HOST, _SYSINFO_ID) if secret in haystack]
+    return [secret for secret in (_TOKEN, _ADMIN_PASSWORD, _HOST, _SYSINFO_ID, _HOSTNAME) if secret in haystack]
 
 
 class TestAsyncGetConfigEntryDiagnostics:
@@ -146,6 +150,8 @@ class TestAsyncGetConfigEntryDiagnostics:
         assert diagnostics["entry"]["data"]["host"] == "**REDACTED**"
         assert diagnostics["entry"]["unique_id"] == "**REDACTED**"
         assert diagnostics["server"]["sysinfo"]["id"] == "**REDACTED**"
+        assert diagnostics["server"]["sysinfo"]["hostname"] == "**REDACTED**"
+        assert diagnostics["entry"]["title"] == "**REDACTED**"
 
     async def test_non_sensitive_fields_pass_through(self) -> None:
         hass = FakeHass()
@@ -165,7 +171,9 @@ class TestAsyncGetConfigEntryDiagnostics:
         # A COLOR priority's RGB value is not redacted -- see TO_REDACT.
         assert instance["priorities"][0]["value"] == {"RGB": [255, 0, 255]}
         assert diagnostics["server"]["roster"]["0"]["friendly_name"] == "Living Room"
-        assert diagnostics["server"]["sysinfo"]["hostname"] == "living-room-hyperhdr"
+        # hostname (and the entry's title, the same value) ARE redacted --
+        # see test_redacted_keys_show_the_redaction_marker -- they identify
+        # the physical server just as much as sysinfo's id/unique_id do.
 
     async def test_disconnected_instance_with_no_client_does_not_raise(self) -> None:
         hass = FakeHass()
