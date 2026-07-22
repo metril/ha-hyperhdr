@@ -5,7 +5,6 @@
   "config_flow": true,
   "dependencies": ["ssdp"],
   "documentation": "https://github.com/metril/ha-hyperhdr",
-  "homeassistant": "2025.1.0",
   "integration_type": "hub",
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/metril/ha-hyperhdr/issues",
