@@ -1,14 +1,22 @@
-"""Shared test infrastructure: a scripted fake aiohttp WebSocket + session.
+"""Shared test infrastructure: a scripted fake aiohttp WebSocket + session,
+plus (from Phase 3 on) house-style ``homeassistant`` stubs.
 
 Deliberately lean -- only the aiohttp surface the client actually touches
 (``ws_connect``, ``receive``/async iteration, ``send_json``, ``close``,
-``closed``) is implemented.
+``closed``) is implemented. The ``homeassistant`` stubs below are injected
+into ``sys.modules`` at import time so ``coordinator.py``/``entity.py``/
+``__init__.py`` can be imported without the real package installed; they are
+pure additions that never touch ``aiohttp`` or any Phase 2 module, so the
+existing client/model tests keep resolving to the real ``client.py``/
+``models.py`` untouched.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import sys
+import types
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -243,3 +251,416 @@ def build_connect_script(
             return frames
     frames.append(serverinfo_frame(tan, serverinfo_info))
     return frames
+
+
+# --- homeassistant stubs (Phase 3+) -----------------------------------------
+#
+# ``coordinator.py``/``entity.py``/``__init__.py`` are the first modules in
+# this repo to import ``homeassistant``. Rather than pull in the real
+# (heavyweight) package, inject a lean sys.modules stub -- modeled on the
+# ha-awtrix house pattern -- covering only what those three files import.
+# Real behavioral fidelity (DataUpdateCoordinator listener plumbing,
+# CoordinatorEntity.available, entity/device registry purge calls, the
+# dispatcher) is reproduced closely enough that unit tests can assert on it;
+# anything not exercised by these files (e.g. the real config-flow surface)
+# is intentionally left out.
+
+
+def _make_module(name: str, **attrs: Any) -> types.ModuleType:
+    mod = types.ModuleType(name)
+    for key, value in attrs.items():
+        setattr(mod, key, value)
+    return mod
+
+
+class FakeConfigEntry:
+    """Stand-in for ``homeassistant.config_entries.ConfigEntry``.
+
+    ``runtime_data`` is deliberately never assigned in ``__init__`` --
+    exactly like the real class, accessing it before ``async_setup_entry``
+    assigns it raises ``AttributeError``, which the production code relies
+    on (via ``hasattr``) to tell an in-progress first connect from a
+    reconnect after setup already completed.
+    """
+
+    def __init__(
+        self,
+        *,
+        entry_id: str = "test-entry",
+        unique_id: str | None = None,
+        title: str = "HyperHDR",
+        data: dict[str, Any] | None = None,
+        options: dict[str, Any] | None = None,
+    ) -> None:
+        self.entry_id = entry_id
+        self.unique_id = unique_id
+        self.title = title
+        self.data = data or {}
+        self.options = options or {}
+        self.update_listeners: list[Callable[..., Any]] = []
+        self.on_unload_callbacks: list[Callable[[], Any]] = []
+        self.reauth_started = False
+
+    def async_on_unload(self, func: Callable[[], Any]) -> None:
+        self.on_unload_callbacks.append(func)
+
+    def add_update_listener(self, listener: Callable[..., Any]) -> Callable[[], None]:
+        self.update_listeners.append(listener)
+        return lambda: self.update_listeners.remove(listener)
+
+    def async_start_reauth(self, hass: Any) -> None:
+        self.reauth_started = True
+
+    def __class_getitem__(cls, item: Any) -> Any:
+        # Supports ``ConfigEntry[HyperHdrRuntimeData]`` (PEP 695 ``type``
+        # alias RHS) without needing real Generic machinery.
+        return cls
+
+
+class FakeEntityEntry:
+    """Stand-in for ``homeassistant.helpers.entity_registry.RegistryEntry``."""
+
+    def __init__(self, entity_id: str, unique_id: str, config_entry_id: str) -> None:
+        self.entity_id = entity_id
+        self.unique_id = unique_id
+        self.config_entry_id = config_entry_id
+
+
+class FakeEntityRegistry:
+    def __init__(self) -> None:
+        self.entities: dict[str, FakeEntityEntry] = {}
+        self.removed: list[str] = []
+
+    def add(self, entity_id: str, unique_id: str, config_entry_id: str) -> FakeEntityEntry:
+        entry = FakeEntityEntry(entity_id, unique_id, config_entry_id)
+        self.entities[entity_id] = entry
+        return entry
+
+
+class FakeDeviceEntry:
+    """Stand-in for ``homeassistant.helpers.device_registry.DeviceEntry``."""
+
+    def __init__(self, device_id: str, identifiers: set[tuple[str, str]]) -> None:
+        self.id = device_id
+        self.identifiers = identifiers
+
+
+class FakeDeviceRegistry:
+    def __init__(self) -> None:
+        self.devices: dict[str, FakeDeviceEntry] = {}
+        self.removed: list[str] = []
+
+    def add(self, device_id: str, identifiers: set[tuple[str, str]]) -> FakeDeviceEntry:
+        entry = FakeDeviceEntry(device_id, identifiers)
+        self.devices[device_id] = entry
+        return entry
+
+    def async_get_device(self, identifiers: set[tuple[str, str]]) -> FakeDeviceEntry | None:
+        for entry in self.devices.values():
+            if entry.identifiers & identifiers:
+                return entry
+        return None
+
+    def async_remove_device(self, device_id: str) -> None:
+        self.removed.append(device_id)
+        self.devices.pop(device_id, None)
+
+
+class _FakeConfigEntriesManager:
+    """Stand-in for ``hass.config_entries``."""
+
+    def __init__(self) -> None:
+        self.forward_calls: list[tuple[Any, list[Any]]] = []
+        self.unload_calls: list[tuple[Any, list[Any]]] = []
+        self.reload_calls: list[str] = []
+
+    async def async_forward_entry_setups(self, entry: Any, platforms: Iterable[Any]) -> None:
+        self.forward_calls.append((entry, list(platforms)))
+
+    async def async_unload_platforms(self, entry: Any, platforms: Iterable[Any]) -> bool:
+        self.unload_calls.append((entry, list(platforms)))
+        return True
+
+    async def async_reload(self, entry_id: str) -> None:
+        self.reload_calls.append(entry_id)
+
+
+class FakeHass:
+    """Stand-in for ``homeassistant.core.HomeAssistant``.
+
+    ``async_create_task`` schedules a real ``asyncio.Task`` (so pushed
+    coroutines -- e.g. the diff handler triggered by an ``instance-update``
+    push -- actually run); ``async_block_till_done`` (mirroring the real
+    test helper of the same name) drains them so a test can deterministically
+    wait for a fire-and-forget task without a real sleep.
+    """
+
+    def __init__(self) -> None:
+        self.data: dict[str, Any] = {}
+        self.config_entries = _FakeConfigEntriesManager()
+        self.entity_registry = FakeEntityRegistry()
+        self.device_registry = FakeDeviceRegistry()
+        self.client_session = object()
+        self.insecure_client_session = object()
+        self.dispatcher_calls: dict[str, list[tuple[Any, ...]]] = {}
+        self.dispatcher_listeners: dict[str, list[Callable[..., Any]]] = {}
+        self._tasks: list[asyncio.Task[Any]] = []
+
+    def async_create_task(self, coro: Any, name: str | None = None, eager_start: bool = False) -> asyncio.Task[Any]:
+        task: asyncio.Task[Any] = asyncio.ensure_future(coro)
+        self._tasks.append(task)
+        return task
+
+    async def async_block_till_done(self) -> None:
+        while self._tasks:
+            tasks, self._tasks = self._tasks, []
+            await asyncio.gather(*tasks)
+
+
+class FakeInstanceClient:
+    """A lightweight double for ``HyperHdrInstanceClient``: records
+    start()/stop() calls and exposes the on_connected/on_disconnected/
+    on_auth_failed slots + push callback registry a coordinator's
+    ``attach_client`` wires up, without any real networking."""
+
+    def __init__(self, instance_id: int = 0) -> None:
+        self.instance_id = instance_id
+        self.start_calls = 0
+        self.stop_calls = 0
+        self.on_connected: Callable[..., Any] | None = None
+        self.on_disconnected: Callable[..., Any] | None = None
+        self.on_auth_failed: Callable[..., Any] | None = None
+        self.push_callbacks: dict[str, Callable[[dict[str, Any]], None]] = {}
+
+    def set_push_callback(self, topic: str, cb: Callable[[dict[str, Any]], None] | None) -> None:
+        if cb is None:
+            self.push_callbacks.pop(topic, None)
+        else:
+            self.push_callbacks[topic] = cb
+
+    async def start(self) -> None:
+        self.start_calls += 1
+
+    async def stop(self) -> None:
+        self.stop_calls += 1
+
+
+class FakeServerClient:
+    """A double for ``HyperHdrServerClient`` for entry-setup tests.
+
+    ``start()`` synchronously drives the same callback slots the real
+    client would invoke (``on_connected``/``on_auth_failed``), configurable
+    per test via ``connect_behavior``/``connect_info``/``sysinfo_result`` so
+    a test can script a clean connect, a timeout (never resolves), or an
+    auth failure without any real socket or real sleep.
+    """
+
+    def __init__(self, session: Any, host: str, port: int, **kwargs: Any) -> None:
+        self.session = session
+        self.host = host
+        self.port = port
+        self.kwargs = kwargs
+        self.on_connected = kwargs.get("on_connected")
+        self.on_disconnected = kwargs.get("on_disconnected")
+        self.on_auth_failed = kwargs.get("on_auth_failed")
+        self.push_callbacks: dict[str, Callable[[dict[str, Any]], None]] = {}
+        self.start_calls = 0
+        self.stop_calls = 0
+        # Test-controlled behavior:
+        self.connect_behavior = "success"  # "success" | "timeout" | "auth_failed"
+        self.connect_info: dict[str, Any] = {"instance": []}
+        self.sysinfo_result: Any = None
+
+    def set_push_callback(self, topic: str, cb: Callable[[dict[str, Any]], None] | None) -> None:
+        if cb is None:
+            self.push_callbacks.pop(topic, None)
+        else:
+            self.push_callbacks[topic] = cb
+
+    async def start(self) -> None:
+        self.start_calls += 1
+        if self.connect_behavior == "success" and self.on_connected is not None:
+            await self.on_connected(self.connect_info)
+        elif self.connect_behavior == "auth_failed" and self.on_auth_failed is not None:
+            self.on_auth_failed()
+        # "timeout": deliberately calls neither callback.
+
+    async def stop(self) -> None:
+        self.stop_calls += 1
+
+    async def async_sysinfo(self) -> Any:
+        return self.sysinfo_result
+
+
+def _stub_homeassistant() -> None:
+    """Inject minimal ``homeassistant`` stubs so coordinator/entity/__init__
+    can be imported without the real package."""
+    if "homeassistant" in sys.modules and getattr(sys.modules["homeassistant"], "_hyperhdr_stub", False):
+        return
+
+    ha = _make_module("homeassistant")
+    ha._hyperhdr_stub = True
+
+    ha_core = _make_module(
+        "homeassistant.core",
+        HomeAssistant=FakeHass,
+        callback=lambda func: func,
+    )
+    ha.core = ha_core
+
+    ha_ce = _make_module("homeassistant.config_entries", ConfigEntry=FakeConfigEntry)
+    ha.config_entries = ha_ce
+
+    class _Platform:
+        pass
+
+    ha_const = _make_module("homeassistant.const", Platform=_Platform, CONF_HOST="host", CONF_PORT="port")
+    ha.const = ha_const
+
+    class ConfigEntryNotReady(Exception):
+        pass
+
+    class ConfigEntryAuthFailed(Exception):
+        pass
+
+    ha_exc = _make_module(
+        "homeassistant.exceptions",
+        ConfigEntryNotReady=ConfigEntryNotReady,
+        ConfigEntryAuthFailed=ConfigEntryAuthFailed,
+        HomeAssistantError=Exception,
+    )
+    ha.exceptions = ha_exc
+
+    ha_helpers = _make_module("homeassistant.helpers")
+    ha.helpers = ha_helpers
+
+    from typing import Generic, TypeVar
+
+    _T = TypeVar("_T")
+
+    class _DataUpdateCoordinator(Generic[_T]):
+        """Minimal stub reproducing the bits of DataUpdateCoordinator our
+        code relies on: ``data``/``last_update_success``, listener
+        add/remove, and ``async_set_updated_data`` notifying listeners.
+        Deliberately has no ``_async_update_data``/refresh machinery --
+        our coordinators never call it (``update_interval=None``)."""
+
+        def __init__(
+            self,
+            hass: Any = None,
+            logger: Any = None,
+            *,
+            name: str = "",
+            update_interval: Any = None,
+            config_entry: Any = None,
+            **kwargs: Any,
+        ) -> None:
+            self.hass = hass
+            self.logger = logger
+            self.name = name
+            self.update_interval = update_interval
+            self.config_entry = config_entry
+            self.data: Any = None
+            self.last_update_success = True
+            self._listeners: list[Callable[[], None]] = []
+
+        def async_set_updated_data(self, data: Any) -> None:
+            self.data = data
+            self.last_update_success = True
+            for listener in list(self._listeners):
+                listener()
+
+        def async_add_listener(self, update_callback: Callable[[], None], context: Any = None) -> Callable[[], None]:
+            self._listeners.append(update_callback)
+
+            def _remove() -> None:
+                if update_callback in self._listeners:
+                    self._listeners.remove(update_callback)
+
+            return _remove
+
+    class _CoordinatorEntity(Generic[_T]):
+        """Minimal stub for CoordinatorEntity: ``available`` reflects
+        ``coordinator.last_update_success``, matching the real base class."""
+
+        def __init__(self, coordinator: Any = None, **kwargs: Any) -> None:
+            self.coordinator = coordinator
+
+        @property
+        def available(self) -> bool:
+            return bool(self.coordinator.last_update_success)
+
+    ha_uc = _make_module(
+        "homeassistant.helpers.update_coordinator",
+        DataUpdateCoordinator=_DataUpdateCoordinator,
+        CoordinatorEntity=_CoordinatorEntity,
+        UpdateFailed=Exception,
+    )
+    ha_helpers.update_coordinator = ha_uc
+
+    ha_dr = _make_module(
+        "homeassistant.helpers.device_registry",
+        DeviceInfo=dict,
+        async_get=lambda hass: hass.device_registry,
+    )
+    ha_helpers.device_registry = ha_dr
+
+    def _er_async_entries_for_config_entry(registry: FakeEntityRegistry, config_entry_id: str) -> list[FakeEntityEntry]:
+        return [e for e in registry.entities.values() if e.config_entry_id == config_entry_id]
+
+    def _er_async_remove(registry: FakeEntityRegistry, entity_id: str) -> None:
+        registry.removed.append(entity_id)
+        registry.entities.pop(entity_id, None)
+
+    ha_er = _make_module(
+        "homeassistant.helpers.entity_registry",
+        async_get=lambda hass: hass.entity_registry,
+        async_entries_for_config_entry=_er_async_entries_for_config_entry,
+        async_remove=_er_async_remove,
+    )
+    ha_helpers.entity_registry = ha_er
+
+    def _async_dispatcher_send(hass: Any, signal: str, *args: Any) -> None:
+        hass.dispatcher_calls.setdefault(signal, []).append(args)
+        for target in list(hass.dispatcher_listeners.get(signal, [])):
+            target(*args)
+
+    def _async_dispatcher_connect(hass: Any, signal: str, target: Callable[..., Any]) -> Callable[[], None]:
+        hass.dispatcher_listeners.setdefault(signal, []).append(target)
+
+        def _unsub() -> None:
+            if target in hass.dispatcher_listeners.get(signal, []):
+                hass.dispatcher_listeners[signal].remove(target)
+
+        return _unsub
+
+    ha_dispatcher = _make_module(
+        "homeassistant.helpers.dispatcher",
+        async_dispatcher_send=_async_dispatcher_send,
+        async_dispatcher_connect=_async_dispatcher_connect,
+    )
+    ha_helpers.dispatcher = ha_dispatcher
+
+    def _async_get_clientsession(hass: Any, verify_ssl: bool = True, **kwargs: Any) -> Any:
+        return hass.client_session if verify_ssl else hass.insecure_client_session
+
+    ha_ac = _make_module(
+        "homeassistant.helpers.aiohttp_client",
+        async_get_clientsession=_async_get_clientsession,
+    )
+    ha_helpers.aiohttp_client = ha_ac
+
+    sys.modules["homeassistant"] = ha
+    sys.modules["homeassistant.core"] = ha_core
+    sys.modules["homeassistant.config_entries"] = ha_ce
+    sys.modules["homeassistant.const"] = ha_const
+    sys.modules["homeassistant.exceptions"] = ha_exc
+    sys.modules["homeassistant.helpers"] = ha_helpers
+    sys.modules["homeassistant.helpers.update_coordinator"] = ha_uc
+    sys.modules["homeassistant.helpers.device_registry"] = ha_dr
+    sys.modules["homeassistant.helpers.entity_registry"] = ha_er
+    sys.modules["homeassistant.helpers.dispatcher"] = ha_dispatcher
+    sys.modules["homeassistant.helpers.aiohttp_client"] = ha_ac
+
+
+_stub_homeassistant()

@@ -70,5 +70,21 @@ COMPONENT_LABELS: dict[str, str] = {
 HDR_MODE_OFF = 0
 HDR_MODE_ON = 1
 
-# Dispatcher signal used later for dynamic entity dispatch.
+# Instance-scoped push topics with a matching HyperHdrInstanceData.apply_*
+# handler (see coordinator.py). Named here (rather than left as inline
+# literals) since both coordinator.py and __init__.py need to reference the
+# exact wire strings.
+COMPONENTS_UPDATE_TOPIC = "components-update"
+PRIORITIES_UPDATE_TOPIC = "priorities-update"
+ADJUSTMENT_UPDATE_TOPIC = "adjustment-update"
+EFFECTS_UPDATE_TOPIC = "effects-update"
+
+# Server-scoped push topic carrying the instance roster.
+INSTANCE_UPDATE_TOPIC = "instance-update"
+
+# Dispatcher signals for dynamic entity dispatch (fired as f"{SIGNAL}_{entry.entry_id}").
+# SIGNAL_INSTANCE_ADDED: a new instance id appeared in the roster (regardless of running state).
 SIGNAL_INSTANCE_ADDED = f"{DOMAIN}_instance_added"
+# SIGNAL_INSTANCE_READY: an instance coordinator was just created and seeded -- entities for
+# that instance can now be added.
+SIGNAL_INSTANCE_READY = f"{DOMAIN}_instance_ready"
