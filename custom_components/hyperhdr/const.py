@@ -79,6 +79,20 @@ COMPONENT_LABELS: dict[str, str] = {
 HDR_MODE_OFF = 0
 HDR_MODE_ON = 1
 
+# Priority "componentId" values used (light.py, sensor.py) to classify the
+# visible priority -- confirmed on live serverinfo captures for color/effect
+# commands issued by this integration.
+PRIORITY_COMPONENT_COLOR = "COLOR"
+PRIORITY_COMPONENT_EFFECT = "EFFECT"
+
+# light.py: synthetic effect representing "no effect running, just a solid
+# color" -- not part of serverinfo's effects[], always prepended to
+# HyperHdrLight.effect_list.
+EFFECT_SOLID = "Solid"
+
+# select.py: priority_source's synthetic "no manual override" option.
+SOURCE_AUTO = "Auto"
+
 # Instance-scoped push topics with a matching HyperHdrInstanceData.apply_*
 # handler (see coordinator.py). Named here (rather than left as inline
 # literals) since both coordinator.py and __init__.py need to reference the
