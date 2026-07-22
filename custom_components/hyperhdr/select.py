@@ -80,12 +80,21 @@ class HyperHdrHdrToneMappingSelect(HyperHdrInstanceEntity, SelectEntity):
         return _HDR_MODE_TO_OPTION.get(self.coordinator.data.hdr_mode)
 
     async def async_select_option(self, option: str) -> None:
-        """Set HDR tone mapping to the selected option."""
+        """Set HDR tone mapping to the selected option.
+
+        Optimistically publishes the new ``hdr_mode`` through the
+        coordinator on success (Phase 7+8 fix) -- HyperHDR pushes no
+        ``videomode-update`` for this transition, so without it the select
+        would revert to the pre-toggle option until the next reconnect. See
+        ``HyperHdrInstanceCoordinator.apply_optimistic_hdr_mode``.
+        """
         client = require_instance_client(self.coordinator)
+        mode = _HDR_OPTION_TO_MODE[option]
         try:
-            await client.async_set_hdr_mode(_HDR_OPTION_TO_MODE[option])
+            await client.async_set_hdr_mode(mode)
         except HyperHdrError as err:
             raise HomeAssistantError(f"failed to set HyperHDR HDR tone mapping: {err}") from err
+        self.coordinator.apply_optimistic_hdr_mode(mode)
 
 
 class HyperHdrPrioritySourceSelect(HyperHdrInstanceEntity, SelectEntity):

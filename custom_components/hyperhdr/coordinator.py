@@ -193,6 +193,24 @@ class HyperHdrInstanceCoordinator(DataUpdateCoordinator[HyperHdrInstanceData]):
         if self.data is not None:
             self.async_set_updated_data(replace(self.data, connected=False))
 
+    def apply_optimistic_hdr_mode(self, mode: int) -> None:
+        """Publish an optimistic ``hdr_mode`` update (Phase 7+8 fix).
+
+        Called by select.py right after a successful ``async_set_hdr_mode``
+        so the select reflects the new state immediately, without waiting
+        for a push or reconnect. HyperHDR does NOT push a
+        ``videomode-update`` for HDR toggles (confirmed live -- see
+        docs/api-notes.md); toggling HDR instead fires a ``components-update``
+        for component name ``"HDR"``, which carries no mode value. Absent
+        this, the select would silently revert to showing the pre-toggle
+        option until the next full ``serverinfo`` refresh (e.g. a
+        reconnect). An externally-triggered change (e.g. from HyperHDR's own
+        web UI) is still only picked up on that next reconnect/serverinfo
+        refresh, not live -- an accepted, documented trade-off, not a bug.
+        """
+        if self.data is not None:
+            self.async_set_updated_data(replace(self.data, hdr_mode=mode))
+
     def _make_push_handler(
         self, applier: Callable[[HyperHdrInstanceData, Any], HyperHdrInstanceData]
     ) -> Callable[[dict[str, Any]], None]:

@@ -118,6 +118,30 @@ class TestHdrToneMappingSelect:
         await select.async_select_option("on")
         assert client.calls == [("async_set_hdr_mode", (1,), {})]
 
+    async def test_select_option_optimistically_updates_coordinator_data(self) -> None:
+        """Directed fix B: the select must show the new state immediately,
+        without waiting for a push/reconnect -- HyperHDR pushes no
+        videomode-update for this transition (see docs/api-notes.md)."""
+        entry, coordinator, _client = _make_setup()
+        coordinator.async_set_updated_data(_instance_data(hdr_mode=0))
+        select = HyperHdrHdrToneMappingSelect(coordinator, entry, 1)
+
+        await select.async_select_option("on")
+
+        assert coordinator.data.hdr_mode == 1
+        assert select.current_option == "on"
+
+    async def test_failed_select_option_does_not_optimistically_update(self) -> None:
+        entry, coordinator, _client = _make_setup()
+        coordinator.client = FakeDomainClient(raise_on=HyperHdrError("boom"))  # type: ignore[assignment]
+        coordinator.async_set_updated_data(_instance_data(hdr_mode=0))
+        select = HyperHdrHdrToneMappingSelect(coordinator, entry, 1)
+
+        with pytest.raises(HomeAssistantError):
+            await select.async_select_option("on")
+
+        assert coordinator.data.hdr_mode == 0
+
     async def test_wraps_hyperhdr_error(self) -> None:
         entry, coordinator, _client = _make_setup()
         coordinator.client = FakeDomainClient(raise_on=HyperHdrError("boom"))  # type: ignore[assignment]
