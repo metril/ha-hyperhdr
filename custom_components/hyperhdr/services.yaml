@@ -1,0 +1,68 @@
+set_color:
+  fields:
+    device_id:
+      required: true
+      selector:
+        device:
+          integration: hyperhdr
+    rgb_color:
+      required: true
+      selector:
+        color_rgb:
+    priority:
+      required: false
+      selector:
+        number:
+          min: 1
+          max: 253
+          mode: box
+    duration:
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 3600
+          unit_of_measurement: seconds
+          mode: box
+
+set_effect:
+  fields:
+    device_id:
+      required: true
+      selector:
+        device:
+          integration: hyperhdr
+    effect:
+      required: true
+      selector:
+        text:
+    priority:
+      required: false
+      selector:
+        number:
+          min: 1
+          max: 253
+          mode: box
+    duration:
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 3600
+          unit_of_measurement: seconds
+          mode: box
+
+clear:
+  fields:
+    device_id:
+      required: true
+      selector:
+        device:
+          integration: hyperhdr
+    priority:
+      required: true
+      selector:
+        number:
+          min: -1
+          max: 253
+          mode: box

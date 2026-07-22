@@ -46,6 +46,7 @@ from .const import (
 from .coordinator import HyperHdrInstanceCoordinator, HyperHdrRuntimeData, HyperHdrServerCoordinator, _diff_instances
 from .entity import server_device_info, server_uid
 from .models import HyperHdrServerData
+from .services import async_setup_services, async_unload_services
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -256,6 +257,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: HyperHdrConfigEntry) -> 
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
+    # Registered once for the whole domain, not per entry -- has_service-guarded.
+    await async_setup_services(hass)
     return True
 
 
@@ -276,6 +279,15 @@ async def async_unload_entry(hass: HomeAssistant, entry: HyperHdrConfigEntry) ->
         await runtime.server_client.stop()
 
     _diff_locks.pop(entry.entry_id, None)
+
+    # This entry's own state is still LOADED/UNLOAD_IN_PROGRESS (not
+    # LOADED) at this point -- the framework flips it to NOT_LOADED only
+    # after this function returns -- so async_loaded_entries here already
+    # excludes it, and correctly reflects whether any *other* entry for
+    # this domain is still up.
+    if unload_ok and not hass.config_entries.async_loaded_entries(DOMAIN):
+        async_unload_services(hass)
+
     return unload_ok
 
 

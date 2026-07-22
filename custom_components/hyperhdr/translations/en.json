@@ -111,9 +111,54 @@
           "default_priority": "The HyperHDR priority (1-253) Home Assistant uses when setting colors/effects. Lower numbers win over higher numbers on HyperHDR's priority stack.",
           "hidden_effects": "Effects to exclude from the effect list entity (e.g. ones you never use). Effects already hidden remain selectable here even if HyperHDR isn't currently reporting them (e.g. while disconnected).",
           "request_timeout": "How long to wait for a response to a single command before treating it as failed.",
-          "heartbeat": "How often to send a WebSocket ping to keep the connection alive.",
+          "heartbeat": "How long the connection may sit idle before Home Assistant sends a lightweight request to keep it alive and detect a dead connection sooner.",
           "stale_timeout": "Force a reconnect if nothing has been received from the server for this long."
         }
+      }
+    }
+  },
+  "services": {
+    "set_color": {
+      "name": "Set color",
+      "description": "Set a solid color at a priority on a HyperHDR instance.",
+      "fields": {
+        "device_id": { "name": "Device", "description": "The HyperHDR instance to control." },
+        "rgb_color": { "name": "Color", "description": "The RGB color to set." },
+        "priority": {
+          "name": "Priority",
+          "description": "HyperHDR priority to set the color at (1-253). Defaults to this integration's configured default priority when omitted."
+        },
+        "duration": {
+          "name": "Duration",
+          "description": "How long to show the color, in seconds. Leave blank to show it indefinitely."
+        }
+      }
+    },
+    "set_effect": {
+      "name": "Set effect",
+      "description": "Start a HyperHDR effect at a priority on a HyperHDR instance.",
+      "fields": {
+        "device_id": { "name": "Device", "description": "The HyperHDR instance to control." },
+        "effect": {
+          "name": "Effect",
+          "description": "The exact name of the effect to start, as reported by HyperHDR."
+        },
+        "priority": {
+          "name": "Priority",
+          "description": "HyperHDR priority to start the effect at (1-253). Defaults to this integration's configured default priority when omitted."
+        },
+        "duration": {
+          "name": "Duration",
+          "description": "How long to run the effect, in seconds. Leave blank to run it indefinitely."
+        }
+      }
+    },
+    "clear": {
+      "name": "Clear priority",
+      "description": "Clear a priority (or every priority) on a HyperHDR instance.",
+      "fields": {
+        "device_id": { "name": "Device", "description": "The HyperHDR instance to control." },
+        "priority": { "name": "Priority", "description": "The priority to clear. Use -1 to clear every priority." }
       }
     }
   }
