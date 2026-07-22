@@ -162,6 +162,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: HyperHdrConfigEntry) -> 
         entry.async_start_reauth(hass)
 
     def _handle_instance_update_push(frame: dict[str, Any]) -> None:
+        if not hasattr(entry, "runtime_data"):
+            # Narrow race: the subscription (sent as part of the connect
+            # handshake's own serverinfo call) only goes live once
+            # on_connected has already fired, but there's a brief window
+            # after that -- before runtime_data is assigned below -- where
+            # a real push could still arrive. The roster async_setup_entry
+            # is about to seed from already reflects this, so it's safe
+            # to drop.
+            return
         roster = HyperHdrServerData.instances_from_roster(frame.get("data", []))
         hass.async_create_task(_async_handle_instance_diff(hass, entry, roster))
 

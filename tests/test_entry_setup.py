@@ -75,6 +75,24 @@ class TestAsyncSetupEntryHappyPath:
         assert hass.config_entries.forward_calls == [(entry, [])]
         assert entry.update_listeners  # add_update_listener was registered
 
+    async def test_instance_update_push_before_runtime_data_assigned_does_not_crash(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Guards a narrow race: the instance-update subscription (sent as
+        part of the connect handshake) can only go live once on_connected
+        has already fired, but there's a brief window after that -- before
+        runtime_data is assigned -- where a push could still land."""
+        hass = FakeHass()
+        entry = _entry()
+        clients = _patch_server_client(monkeypatch)
+
+        await hyperhdr.async_setup_entry(hass, entry)  # type: ignore[arg-type]
+        push_cb = clients[0].push_callbacks[hyperhdr.INSTANCE_UPDATE_TOPIC]
+        del entry.runtime_data  # type: ignore[attr-defined]
+
+        push_cb({"data": [{"instance": 0, "friendly_name": "First", "running": True}]})
+        await hass.async_block_till_done()  # must not raise
+
     async def test_default_priority_and_hidden_effects_come_from_options(self, monkeypatch: pytest.MonkeyPatch) -> None:
         hass = FakeHass()
         entry = _entry()
