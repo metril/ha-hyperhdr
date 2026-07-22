@@ -442,6 +442,29 @@ class TestLedstreamRefcounting:
         await probe_task
         assert len(frames) == 0
 
+    async def test_start_ledstream_rolls_back_refcount_and_callback_on_send_failure(
+        self, connected_instance: tuple[HyperHdrInstanceClient, FakeWebSocket]
+    ) -> None:
+        """Regression: found while implementing camera.py (this refcounted
+        API's first real caller). A failed ledstream-start send used to
+        leave the refcount permanently incremented with no matching
+        stop_ledstream ever having run, silently breaking every later
+        start_ledstream on this connection (they'd see a non-zero refcount
+        and skip resending the real start command -- no frames, ever, until
+        a reconnect)."""
+        client, _ws = connected_instance
+
+        async def _boom(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            raise HyperHdrConnectionError("boom")
+
+        client._send_command = _boom  # type: ignore[method-assign]
+
+        with pytest.raises(HyperHdrConnectionError):
+            await client.start_ledstream(lambda data: None)
+
+        assert client._ledstream_refcount == 0
+        assert LEDSTREAM_UPDATE_TOPIC not in client._push_callbacks
+
 
 class TestImagestreamRequiresAdmin:
     async def test_start_imagestream_without_admin_login_raises(
@@ -479,4 +502,32 @@ class TestImagestreamRequiresAdmin:
 
         ws.push({"command": IMAGESTREAM_UPDATE_TOPIC, "result": {}, "success": True, "tan": sent["tan"]})
         await wait_until(lambda: len(frames) == 1)
+        await client.stop()
+
+    async def test_start_imagestream_rolls_back_refcount_and_callback_on_send_failure(self) -> None:
+        """Same regression as ledstream's -- see that test's docstring."""
+        ws = FakeWebSocket(build_connect_script(is_instance=True, instance_id=0, admin_password="hyperhdr"))
+        session = FakeClientSession(ws)
+        client = HyperHdrInstanceClient(
+            session,  # type: ignore[arg-type]
+            "localhost",
+            8090,
+            instance_id=0,
+            admin_password="hyperhdr",
+            request_timeout=0.2,
+        )
+        await client.start()
+        await wait_until(lambda: client.connected)
+        assert client.admin_logged_in is True
+
+        async def _boom(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            raise HyperHdrConnectionError("boom")
+
+        client._send_command = _boom  # type: ignore[method-assign]
+
+        with pytest.raises(HyperHdrConnectionError):
+            await client.start_imagestream(lambda data: None)
+
+        assert client._imagestream_refcount == 0
+        assert IMAGESTREAM_UPDATE_TOPIC not in client._push_callbacks
         await client.stop()

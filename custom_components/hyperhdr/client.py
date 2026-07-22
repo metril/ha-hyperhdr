@@ -667,11 +667,27 @@ class HyperHdrInstanceClient(HyperHdrBaseClient):
             await self._send_command("sourceselect", priority=priority)
 
     async def start_ledstream(self, cb: Callable[[dict[str, Any]], None]) -> None:
-        """Register ``cb`` for LED-color stream frames, refcounted."""
+        """Register ``cb`` for LED-color stream frames, refcounted.
+
+        Rolls the refcount/callback back on a failed ``ledstream-start``
+        send (e.g. the connection drops mid-call) -- otherwise a raised
+        exception here would leave the refcount permanently incremented
+        with no matching ``stop_ledstream`` ever having a chance to run
+        (camera.py, this refcounted API's first real caller, calls
+        ``start_ledstream`` outside its own try/finally, precisely so a
+        failure here doesn't also swallow the original error), silently
+        breaking every future ``start_ledstream`` on this connection (they'd
+        see a non-zero refcount and skip resending the real start command).
+        """
         self._ledstream_refcount += 1
         self.set_push_callback(LEDSTREAM_UPDATE_TOPIC, cb)
         if self._ledstream_refcount == 1:
-            await self._send_command("ledcolors", subcommand="ledstream-start")
+            try:
+                await self._send_command("ledcolors", subcommand="ledstream-start")
+            except Exception:
+                self._ledstream_refcount -= 1
+                self.set_push_callback(LEDSTREAM_UPDATE_TOPIC, None)
+                raise
 
     async def stop_ledstream(self, cb: Callable[[dict[str, Any]], None]) -> None:
         """Decrement the ledstream refcount, stopping the stream at zero."""
@@ -692,7 +708,12 @@ class HyperHdrInstanceClient(HyperHdrBaseClient):
         self._imagestream_refcount += 1
         self.set_push_callback(IMAGESTREAM_UPDATE_TOPIC, cb)
         if self._imagestream_refcount == 1:
-            await self._send_command("ledcolors", subcommand="imagestream-start")
+            try:
+                await self._send_command("ledcolors", subcommand="imagestream-start")
+            except Exception:
+                self._imagestream_refcount -= 1
+                self.set_push_callback(IMAGESTREAM_UPDATE_TOPIC, None)
+                raise
 
     async def stop_imagestream(self, cb: Callable[[dict[str, Any]], None]) -> None:
         """Decrement the imagestream refcount, stopping the stream at zero."""
