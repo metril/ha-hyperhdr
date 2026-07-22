@@ -513,6 +513,54 @@ class FakeServerClient:
         return self.sysinfo_result
 
 
+class FakeDomainClient:
+    """A recording double for the domain-command surface platform entities
+    call (Phase 5+6): both ``HyperHdrInstanceClient``'s color/effect/clear/
+    component/adjustment/hdr/source-select methods and
+    ``HyperHdrServerClient``'s start/stop instance -- one fake covers both
+    roles since no test needs more than a handful of calls recorded.
+
+    Raises ``raise_on`` (if set) from every recorded method, for testing the
+    HyperHdrError -> HomeAssistantError wrapping platforms are required to do.
+    """
+
+    def __init__(self, raise_on: Exception | None = None) -> None:
+        self.raise_on = raise_on
+        self.calls: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = []
+
+    def _record(self, name: str, *args: Any, **kwargs: Any) -> None:
+        self.calls.append((name, args, kwargs))
+        if self.raise_on is not None:
+            raise self.raise_on
+
+    async def async_set_color(self, rgb: tuple[int, int, int], priority: int, duration_ms: int = 0) -> None:
+        self._record("async_set_color", rgb, priority, duration_ms)
+
+    async def async_set_effect(self, name: str, priority: int, duration_ms: int = 0) -> None:
+        self._record("async_set_effect", name, priority, duration_ms)
+
+    async def async_clear(self, priority: int) -> None:
+        self._record("async_clear", priority)
+
+    async def async_set_component(self, name: str, state: bool) -> None:
+        self._record("async_set_component", name, state)
+
+    async def async_set_adjustment(self, **fields: Any) -> None:
+        self._record("async_set_adjustment", **fields)
+
+    async def async_set_hdr_mode(self, mode: int) -> None:
+        self._record("async_set_hdr_mode", mode)
+
+    async def async_select_source(self, priority: int | None) -> None:
+        self._record("async_select_source", priority)
+
+    async def start_instance(self, instance_id: int) -> None:
+        self._record("start_instance", instance_id)
+
+    async def stop_instance(self, instance_id: int) -> None:
+        self._record("stop_instance", instance_id)
+
+
 def _stub_homeassistant() -> None:
     """Inject minimal ``homeassistant`` stubs so coordinator/entity/__init__
     can be imported without the real package."""
@@ -728,6 +776,108 @@ def _stub_homeassistant() -> None:
     )
     ha_helpers.selector = ha_selector
 
+    # --- entity platform stubs (Phase 5+6) ----------------------------------
+    #
+    # light.py/switch.py/select.py/sensor.py/number.py/button.py are the
+    # first modules to import homeassistant.components.<platform> and
+    # homeassistant.helpers.entity.EntityCategory -- lean stand-ins mirroring
+    # only the surface those six files actually touch: marker base classes
+    # (no real Entity/ToggleEntity behavior needed since every platform here
+    # overrides every property/method it uses), the handful of real
+    # constant/enum values used for state mapping and command payloads, and
+    # the two EntityDescription dataclasses sensor.py/number.py subclass.
+
+    class EntityCategory:
+        CONFIG = "config"
+        DIAGNOSTIC = "diagnostic"
+
+    ha_entity = _make_module("homeassistant.helpers.entity", EntityCategory=EntityCategory)
+    ha_helpers.entity = ha_entity
+
+    class ColorMode:
+        RGB = "rgb"
+
+    class LightEntityFeature:
+        EFFECT = 4
+
+    class LightEntity:
+        pass
+
+    ha_light = _make_module(
+        "homeassistant.components.light",
+        ColorMode=ColorMode,
+        LightEntity=LightEntity,
+        LightEntityFeature=LightEntityFeature,
+        ATTR_BRIGHTNESS="brightness",
+        ATTR_RGB_COLOR="rgb_color",
+        ATTR_EFFECT="effect",
+    )
+
+    class SwitchEntity:
+        pass
+
+    ha_switch = _make_module("homeassistant.components.switch", SwitchEntity=SwitchEntity)
+
+    class SelectEntity:
+        pass
+
+    ha_select = _make_module("homeassistant.components.select", SelectEntity=SelectEntity)
+
+    import dataclasses as _dataclasses
+
+    class SensorEntity:
+        pass
+
+    @_dataclasses.dataclass(frozen=True, kw_only=True)
+    class SensorEntityDescription:
+        key: str
+        name: str | None = None
+        entity_category: Any = None
+        device_class: Any = None
+        state_class: Any = None
+        native_unit_of_measurement: str | None = None
+
+    ha_sensor = _make_module(
+        "homeassistant.components.sensor",
+        SensorEntity=SensorEntity,
+        SensorEntityDescription=SensorEntityDescription,
+    )
+
+    class NumberEntity:
+        pass
+
+    @_dataclasses.dataclass(frozen=True, kw_only=True)
+    class NumberEntityDescription:
+        key: str
+        name: str | None = None
+        entity_category: Any = None
+        native_min_value: float | None = None
+        native_max_value: float | None = None
+        native_step: float | None = None
+        native_unit_of_measurement: str | None = None
+
+    ha_number = _make_module(
+        "homeassistant.components.number",
+        NumberEntity=NumberEntity,
+        NumberEntityDescription=NumberEntityDescription,
+    )
+
+    class ButtonEntity:
+        pass
+
+    ha_button = _make_module("homeassistant.components.button", ButtonEntity=ButtonEntity)
+
+    ha_components = _make_module(
+        "homeassistant.components",
+        light=ha_light,
+        switch=ha_switch,
+        select=ha_select,
+        sensor=ha_sensor,
+        number=ha_number,
+        button=ha_button,
+    )
+    ha.components = ha_components
+
     sys.modules["homeassistant"] = ha
     sys.modules["homeassistant.core"] = ha_core
     sys.modules["homeassistant.config_entries"] = ha_ce
@@ -740,6 +890,14 @@ def _stub_homeassistant() -> None:
     sys.modules["homeassistant.helpers.dispatcher"] = ha_dispatcher
     sys.modules["homeassistant.helpers.aiohttp_client"] = ha_ac
     sys.modules["homeassistant.helpers.selector"] = ha_selector
+    sys.modules["homeassistant.helpers.entity"] = ha_entity
+    sys.modules["homeassistant.components"] = ha_components
+    sys.modules["homeassistant.components.light"] = ha_light
+    sys.modules["homeassistant.components.switch"] = ha_switch
+    sys.modules["homeassistant.components.select"] = ha_select
+    sys.modules["homeassistant.components.sensor"] = ha_sensor
+    sys.modules["homeassistant.components.number"] = ha_number
+    sys.modules["homeassistant.components.button"] = ha_button
 
 
 _stub_homeassistant()
