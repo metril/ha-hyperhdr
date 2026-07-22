@@ -340,6 +340,15 @@ class FakeEntityRegistry:
         self.entities[entity_id] = entry
         return entry
 
+    def async_remove(self, entity_id: str) -> None:
+        """Instance method (matches the real ``EntityRegistry.async_remove``
+        -- confirmed live, Phase 5+6: there is no module-level
+        ``entity_registry.async_remove(registry, entity_id)`` function on
+        the real package; production code calling it that way raised
+        ``AttributeError`` on every instance deletion until fixed)."""
+        self.removed.append(entity_id)
+        self.entities.pop(entity_id, None)
+
 
 class FakeDeviceEntry:
     """Stand-in for ``homeassistant.helpers.device_registry.DeviceEntry``."""
@@ -612,15 +621,14 @@ def _stub_homeassistant() -> None:
     def _er_async_entries_for_config_entry(registry: FakeEntityRegistry, config_entry_id: str) -> list[FakeEntityEntry]:
         return [e for e in registry.entities.values() if e.config_entry_id == config_entry_id]
 
-    def _er_async_remove(registry: FakeEntityRegistry, entity_id: str) -> None:
-        registry.removed.append(entity_id)
-        registry.entities.pop(entity_id, None)
-
+    # NOTE: async_remove is deliberately NOT a module-level function here --
+    # the real homeassistant.helpers.entity_registry module doesn't have one
+    # either. It's an instance method on FakeEntityRegistry (see its class
+    # body above), matching the real EntityRegistry.async_remove(entity_id).
     ha_er = _make_module(
         "homeassistant.helpers.entity_registry",
         async_get=lambda hass: hass.entity_registry,
         async_entries_for_config_entry=_er_async_entries_for_config_entry,
-        async_remove=_er_async_remove,
     )
     ha_helpers.entity_registry = ha_er
 

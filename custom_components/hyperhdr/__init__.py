@@ -313,7 +313,17 @@ async def _async_remove_instance(hass: HomeAssistant, entry: HyperHdrConfigEntry
     entity_registry = er.async_get(hass)
     for entity_entry in er.async_entries_for_config_entry(entity_registry, entry.entry_id):
         if entity_entry.unique_id.startswith(prefix):
-            er.async_remove(entity_registry, entity_entry.entity_id)
+            # NOT a module-level er.async_remove(registry, entity_id) --
+            # confirmed live, Phase 5+6: the real homeassistant.helpers.
+            # entity_registry module has no such function at all;
+            # EntityRegistry.async_remove is an instance method. The
+            # previous call raised AttributeError every time an instance
+            # was deleted from the server roster, silently swallowed by
+            # this being a fire-and-forget task (hass.async_create_task in
+            # the instance-update push handler) -- only surfaced as an
+            # "Error doing job: Task exception was never retrieved" log
+            # entry, never blocking the diff handler's own control flow.
+            entity_registry.async_remove(entity_entry.entity_id)
 
     device_registry = dr.async_get(hass)
     device = device_registry.async_get_device(identifiers={(DOMAIN, f"{uid}_{instance_id}")})
