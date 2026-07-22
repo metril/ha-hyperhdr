@@ -6,7 +6,16 @@ import asyncio
 from typing import Any
 
 import pytest
-from conftest import FakeClientSession, FakeWebSocket, build_connect_script, wait_until
+from conftest import (
+    FakeClientSession,
+    FakeWebSocket,
+    build_connect_script,
+    error_response_frame,
+    ledstream_update_frame,
+    load_fixture,
+    videomodehdr_response_frame,
+    wait_until,
+)
 
 from custom_components.hyperhdr.client import HyperHdrInstanceClient, HyperHdrServerClient
 from custom_components.hyperhdr.const import IMAGESTREAM_UPDATE_TOPIC, LEDSTREAM_UPDATE_TOPIC
@@ -107,7 +116,9 @@ class TestPushRouting:
         received: list[dict[str, Any]] = []
         client.set_push_callback("instance-update", received.append)
 
-        push_msg = {"command": "instance-update", "data": [{"instance": 0, "friendly_name": "x", "running": True}]}
+        # Real capture of the roster push HyperHDR sends after an instance
+        # is stopped (see docs/api-notes.md and instance_update_stopped.json).
+        push_msg = load_fixture("instance_update_stopped.json")
         ws.push(push_msg)
         await wait_until(lambda: len(received) == 1)
         assert received[0] == push_msg
@@ -127,9 +138,7 @@ class TestPushRouting:
         colliding_tan = ws.sent[-1]["tan"]
 
         # A ledstream frame arrives reusing the *same* tan as the pending request.
-        ws.push(
-            {"command": LEDSTREAM_UPDATE_TOPIC, "result": {"leds": [1, 2, 3]}, "success": True, "tan": colliding_tan}
-        )
+        ws.push(ledstream_update_frame(colliding_tan))
         await wait_until(lambda: len(frames) == 1)
         assert frames[0]["tan"] == colliding_tan
 
@@ -177,19 +186,24 @@ class TestMalformedAndUnmatchedFrames:
 
 
 class TestCommandErrors:
-    async def test_success_false_raises_api_error_with_command_and_error(
+    async def test_success_false_raises_api_error_with_real_error_response_fixture(
         self, connected: tuple[HyperHdrServerClient, FakeWebSocket]
     ) -> None:
+        """Real error_response.json capture: an unrecognized command comes
+        back with the FULL server error text (not a truncated hand-typed
+        copy) AND an empty ``command`` field. The pending future must still
+        resolve -- proving correlation is by `tan` alone, never by command
+        name (see docs/api-notes.md)."""
         client, ws = connected
-        task = asyncio.ensure_future(client._send_command("bogus"))
+        task = asyncio.ensure_future(client._send_command("totallyBogusCommand"))
         await wait_until(lambda: len(ws.sent) >= 3)
         tan = ws.sent[-1]["tan"]
-        ws.push({"command": "bogus", "success": False, "tan": tan, "error": "Errors during message validation"})
+        ws.push(error_response_frame(tan))
 
         with pytest.raises(HyperHdrApiError) as excinfo:
             await task
-        assert excinfo.value.command == "bogus"
-        assert excinfo.value.error == "Errors during message validation"
+        assert excinfo.value.command == ""
+        assert excinfo.value.error == "Errors during message validation, please consult the HyperHDR Log."
 
     async def test_raise_on_error_false_returns_raw_dict_on_failure(
         self, connected: tuple[HyperHdrServerClient, FakeWebSocket]
@@ -337,7 +351,10 @@ class TestInstanceClientCommandPayloads:
         client, ws = connected_instance
         before = len(ws.sent)
         task = asyncio.ensure_future(client.async_set_hdr_mode(1))
-        sent = await _wait_and_ack(ws, before)
+        await wait_until(lambda: len(ws.sent) > before)
+        sent = ws.sent[-1]
+        # Real videomodehdr_response.json capture -- a bare success ack, no `info`.
+        ws.push(videomodehdr_response_frame(sent["tan"]))
         await task
         assert sent["command"] == "videomodehdr"
         assert sent["HDR"] == 1
@@ -386,7 +403,7 @@ class TestLedstreamRefcounting:
         assert len(ws.sent) == sent_before_second  # second consumer: no new send
 
         # A pushed frame is routed to the registered callback.
-        ws.push({"command": LEDSTREAM_UPDATE_TOPIC, "result": {"leds": [1, 2, 3]}, "success": True, "tan": sent["tan"]})
+        ws.push(ledstream_update_frame(sent["tan"]))
         await wait_until(lambda: len(frames) == 1)
 
     async def test_stop_ledstream_only_sends_stop_at_refcount_zero(
@@ -418,7 +435,7 @@ class TestLedstreamRefcounting:
         # unmatched-tan/malformed frames). Send another real request
         # afterwards and confirm it still resolves normally, proving the
         # loop stayed healthy and `frames` was never appended to.
-        ws.push({"command": LEDSTREAM_UPDATE_TOPIC, "result": {"leds": [0, 0, 0]}, "success": True, "tan": sent["tan"]})
+        ws.push(ledstream_update_frame(sent["tan"]))
         sent_before_probe = len(ws.sent)
         probe_task = asyncio.ensure_future(client.async_clear(-1))
         await _wait_and_ack(ws, sent_before_probe)

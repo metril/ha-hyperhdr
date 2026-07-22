@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
-from typing import Any
+from conftest import load_fixture
 
 from custom_components.hyperhdr.models import (
     HyperHdrAdjustment,
@@ -16,14 +14,6 @@ from custom_components.hyperhdr.models import (
     HyperHdrServerData,
     HyperHdrSysInfo,
 )
-
-FIXTURES = Path(__file__).parent / "fixtures"
-
-
-def load_fixture(name: str) -> dict[str, Any]:
-    """Load a verbatim wire-capture fixture from disk."""
-    return json.loads((FIXTURES / name).read_text())
-
 
 # --- HyperHdrSysInfo ---------------------------------------------------
 

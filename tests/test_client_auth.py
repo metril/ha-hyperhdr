@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -118,7 +119,10 @@ class TestAdminPassword:
         assert client.admin_logged_in is False
         await client.stop()
 
-    async def test_start_instance_without_admin_login_raises_without_sending(self) -> None:
+    async def test_start_instance_without_admin_login_sends_command_normally(self) -> None:
+        """v22 does NOT require an admin login for startInstance (verified
+        live -- see docs/api-notes.md); the client must always send the
+        command and let a server rejection surface as HyperHdrApiError."""
         ws = FakeWebSocket(build_connect_script())
         session = FakeClientSession(ws)
         client = HyperHdrServerClient(session, "localhost", 8090)  # type: ignore[arg-type]
@@ -127,10 +131,41 @@ class TestAdminPassword:
         await wait_until(lambda: client.connected)
         assert client.admin_logged_in is False
 
-        sent_before = len(ws.sent)
-        with pytest.raises(HyperHdrAuthError):
-            await client.start_instance(1)
-        assert len(ws.sent) == sent_before  # nothing was sent
+        task = asyncio.ensure_future(client.start_instance(1))
+        await wait_until(lambda: len(ws.sent) >= 3)
+        start_sent = ws.sent[-1]
+        assert start_sent["command"] == "instance"
+        assert start_sent["subcommand"] == "startInstance"
+        assert start_sent["instance"] == 1
+        ws.push({"command": "instance-startInstance", "success": True, "tan": start_sent["tan"]})
+
+        await wait_until(lambda: len(ws.sent) >= 4)
+        serverinfo_tan = ws.sent[-1]["tan"]
+        ws.push({"command": "serverinfo", "success": True, "tan": serverinfo_tan, "info": {"instance": []}})
+
+        await task
+        await client.stop()
+
+    async def test_stop_instance_without_admin_login_sends_command_normally(self) -> None:
+        """v22 does NOT require an admin login for stopInstance either
+        (verified live -- see docs/api-notes.md)."""
+        ws = FakeWebSocket(build_connect_script())
+        session = FakeClientSession(ws)
+        client = HyperHdrServerClient(session, "localhost", 8090)  # type: ignore[arg-type]
+
+        await client.start()
+        await wait_until(lambda: client.connected)
+        assert client.admin_logged_in is False
+
+        task = asyncio.ensure_future(client.stop_instance(1))
+        await wait_until(lambda: len(ws.sent) >= 3)
+        stop_sent = ws.sent[-1]
+        assert stop_sent["command"] == "instance"
+        assert stop_sent["subcommand"] == "stopInstance"
+        assert stop_sent["instance"] == 1
+        ws.push({"command": "instance-stopInstance", "success": True, "tan": stop_sent["tan"]})
+
+        await task
         await client.stop()
 
 

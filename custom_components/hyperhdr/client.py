@@ -169,7 +169,8 @@ class HyperHdrBaseClient:
             except asyncio.CancelledError:
                 raise
             except Exception as err:  # noqa: BLE001 - any connect/protocol failure retries
-                _LOGGER.debug("connect attempt failed: %s", err)
+                # WARNING (not DEBUG): a persistent outage must be visible by default.
+                _LOGGER.warning("connect attempt failed: %s", err)
 
             await self._invoke(self.on_disconnected)
             if self._reached_connected:
@@ -341,6 +342,7 @@ class HyperHdrBaseClient:
         try:
             callback(data)
         except Exception:
+            # A broken consumer must not be allowed to kill the receive loop.
             _LOGGER.exception("push callback for topic %s raised", topic)
 
     def _fail_pending(self, exc: Exception) -> None:
@@ -383,14 +385,17 @@ class HyperHdrServerClient(HyperHdrBaseClient):
         return HyperHdrSysInfo.from_dict(info if isinstance(info, dict) else {})
 
     async def start_instance(self, instance_id: int) -> None:
-        """Start a configured instance (requires an admin login).
+        """Start a configured instance.
+
+        No admin login is required for ``startInstance`` on HyperHDR v22
+        (verified live -- see docs/api-notes.md); the command is always
+        sent, and a server-side rejection surfaces as ``HyperHdrApiError``
+        via the existing ``success: false`` path.
 
         ``startInstance`` emits no push on its own (see docs/api-notes.md)
         -- a fresh ``serverinfo`` roster is fetched and fed to the
         ``instance-update`` push callback as a synthetic push.
         """
-        if not self.admin_logged_in:
-            raise HyperHdrAuthError("starting an instance requires an admin login")
         await self._send_command("instance", subcommand="startInstance", instance=instance_id)
         response = await self._send_command("serverinfo", subscribe=list(self._subscriptions))
         info = response.get("info")
@@ -398,9 +403,13 @@ class HyperHdrServerClient(HyperHdrBaseClient):
         self._dispatch_push("instance-update", {"command": "instance-update", "data": roster})
 
     async def stop_instance(self, instance_id: int) -> None:
-        """Stop a running instance (requires an admin login)."""
-        if not self.admin_logged_in:
-            raise HyperHdrAuthError("stopping an instance requires an admin login")
+        """Stop a running instance.
+
+        No admin login is required for ``stopInstance`` on HyperHDR v22
+        (verified live -- see docs/api-notes.md); the command is always
+        sent, and a server-side rejection surfaces as ``HyperHdrApiError``
+        via the existing ``success: false`` path.
+        """
         await self._send_command("instance", subcommand="stopInstance", instance=instance_id)
 
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import aiohttp
@@ -130,15 +131,56 @@ async def wait_until(predicate: Callable[[], bool], *, timeout: float = 1.0) -> 
     await asyncio.wait_for(_poll(), timeout=timeout)
 
 
+# --- fixture loading -----------------------------------------------------
+#
+# Real wire captures from a live HyperHDR 22.0.0beta2 server (see
+# docs/api-notes.md). Tests load these verbatim rather than hand-typing
+# response shapes, so a hand-typed frame can never silently drift from what
+# the real server actually sends.
+
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def load_fixture(name: str) -> dict[str, Any]:
+    """Load a verbatim wire-capture fixture from disk."""
+    return json.loads((FIXTURES / name).read_text())
+
+
 # --- response-frame builders -------------------------------------------------
 #
 # Small helpers for assembling scripted response sequences that match what
 # HyperHdrBaseClient actually sends during its connect handshake, so tests
-# don't have to hand-compute tan numbers.
+# don't have to hand-compute tan numbers. Where a real fixture exists for a
+# frame shape, these load it from disk and patch only what scripting
+# requires (tan correlation, or a variant like `required`).
 
 
 def token_required_frame(tan: int, required: bool) -> dict[str, Any]:
-    return {"command": "authorize-tokenRequired", "success": True, "tan": tan, "info": {"required": required}}
+    frame = load_fixture("authorize_token_required.json")
+    frame["tan"] = tan
+    frame["info"]["required"] = required
+    return frame
+
+
+def ledstream_update_frame(tan: int) -> dict[str, Any]:
+    frame = load_fixture("ledcolors_ledstream_update.json")
+    frame["tan"] = tan
+    return frame
+
+
+def videomodehdr_response_frame(tan: int) -> dict[str, Any]:
+    frame = load_fixture("videomodehdr_response.json")
+    frame["tan"] = tan
+    return frame
+
+
+def error_response_frame(tan: int) -> dict[str, Any]:
+    """The real ``error_response.json`` capture: an unrecognized command
+    gets back ``"command": ""`` (blanked, not echoed) -- only `tan` is
+    patched here, preserving that trait for callers to assert against."""
+    frame = load_fixture("error_response.json")
+    frame["tan"] = tan
+    return frame
 
 
 def login_success_frame(tan: int, token: str = "fake-token") -> dict[str, Any]:
