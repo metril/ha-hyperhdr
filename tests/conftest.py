@@ -581,7 +581,12 @@ def _stub_homeassistant() -> None:
     ha.config_entries = ha_ce
 
     class _Platform:
-        pass
+        LIGHT = "light"
+        SWITCH = "switch"
+        SELECT = "select"
+        SENSOR = "sensor"
+        NUMBER = "number"
+        BUTTON = "button"
 
     ha_const = _make_module("homeassistant.const", Platform=_Platform, CONF_HOST="host", CONF_PORT="port")
     ha.const = ha_const

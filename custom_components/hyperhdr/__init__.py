@@ -55,8 +55,15 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
-# Platform phases (5-7) will populate this.
-PLATFORMS: list[Platform] = []
+# Camera (a later phase) will extend this.
+PLATFORMS: list[Platform] = [
+    Platform.LIGHT,
+    Platform.SWITCH,
+    Platform.SELECT,
+    Platform.SENSOR,
+    Platform.NUMBER,
+    Platform.BUTTON,
+]
 
 # Extra headroom over the client's own request_timeout for the first-connect
 # wait in async_setup_entry -- the client's serverinfo call already carries

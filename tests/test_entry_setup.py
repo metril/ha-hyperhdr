@@ -72,7 +72,7 @@ class TestAsyncSetupEntryHappyPath:
         assert runtime.server_coordinator.data.connected is True
         assert runtime.server_coordinator.data.sysinfo.hostname == "hyperhdr-host"
         assert runtime.instance_coordinators == {}
-        assert hass.config_entries.forward_calls == [(entry, [])]
+        assert hass.config_entries.forward_calls == [(entry, hyperhdr.PLATFORMS)]
         assert entry.update_listeners  # add_update_listener was registered
 
     async def test_instance_update_push_before_runtime_data_assigned_does_not_crash(
@@ -300,7 +300,7 @@ class TestAsyncUnloadEntry:
         assert result is True
         assert instance_client.stop_calls == 1
         assert clients[0].stop_calls == 1
-        assert hass.config_entries.unload_calls == [(entry, [])]
+        assert hass.config_entries.unload_calls == [(entry, hyperhdr.PLATFORMS)]
 
     async def test_idempotent_when_clients_already_stopped(self, monkeypatch: pytest.MonkeyPatch) -> None:
         hass = FakeHass()
