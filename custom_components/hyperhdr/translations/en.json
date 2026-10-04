@@ -141,7 +141,6 @@
       "name": "Set color",
       "description": "Set a solid color at a priority on a HyperHDR instance.",
       "fields": {
-        "device_id": { "name": "Device", "description": "The HyperHDR instance to control." },
         "rgb_color": { "name": "Color", "description": "The RGB color to set." },
         "priority": {
           "name": "Priority",
@@ -157,7 +156,6 @@
       "name": "Set effect",
       "description": "Start a HyperHDR effect at a priority on a HyperHDR instance.",
       "fields": {
-        "device_id": { "name": "Device", "description": "The HyperHDR instance to control." },
         "effect": {
           "name": "Effect",
           "description": "The exact name of the effect to start, as reported by HyperHDR."
@@ -176,7 +174,6 @@
       "name": "Clear priority",
       "description": "Clear a priority (or every priority) on a HyperHDR instance.",
       "fields": {
-        "device_id": { "name": "Device", "description": "The HyperHDR instance to control." },
         "priority": { "name": "Priority", "description": "The priority to clear. Use -1 to clear every priority." }
       }
     }

@@ -13,5 +13,5 @@
     { "manufacturer": "HyperHDR Open Source Ambient Lighting" },
     { "st": "urn:hyperhdr.eu:device:basic:1" }
   ],
-  "version": "0.2.0"
+  "version": "0.3.0"
 }

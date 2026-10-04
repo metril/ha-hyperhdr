@@ -92,13 +92,24 @@ The camera is disabled by default because rendering costs real work (either a Pi
 
 ## Services
 
-All three services target a specific HyperHDR instance device via `device_id` (not the server device).
+All three services use Home Assistant's standard `target:` block. Devices, entities (the instance's light) and areas are accepted, and several instances may be targeted at once; the command runs on each. The server device is not a valid target.
+
+```yaml
+action: hyperhdr.set_color
+target:
+  device_id: 0123456789abcdef
+data:
+  rgb_color: [255, 0, 128]
+  priority: 100
+```
+
+**Breaking changes in 0.3.0:** the `device_id` data field was removed from all three services (no backward compatibility). Move it under `target:` as shown above; existing automations and scripts using `data: device_id:` must be updated. This release also requires Home Assistant 2026.1.0 or newer (for `homeassistant.helpers.target.TargetSelection`).
 
 | Service | Fields | Notes |
 |---------|--------|-------|
-| `hyperhdr.set_color` | `device_id` (required), `rgb_color` (required), `priority` (optional), `duration` (optional, seconds) | Sets a solid color at `priority` (defaults to the integration's configured default priority) |
-| `hyperhdr.set_effect` | `device_id` (required), `effect` (required), `priority` (optional), `duration` (optional, seconds) | Starts an effect by name at `priority` (defaults to the integration's configured default priority) |
-| `hyperhdr.clear` | `device_id` (required), `priority` (required) | Clears the given priority; `-1` clears every priority. Not optional — a destructive action shouldn't silently default |
+| `hyperhdr.set_color` | `rgb_color` (required), `priority` (optional), `duration` (optional, seconds) | Sets a solid color at `priority` (defaults to the integration's configured default priority) |
+| `hyperhdr.set_effect` | `effect` (required), `priority` (optional), `duration` (optional, seconds) | Starts an effect by name at `priority` (defaults to the integration's configured default priority) |
+| `hyperhdr.clear` | `priority` (required) | Clears the given priority; `-1` clears every priority. Not optional — a destructive action shouldn't silently default |
 
 ## Known limitations
 
@@ -109,4 +120,4 @@ All three services target a specific HyperHDR instance device via `device_id` (n
 ## Requirements
 
 - A HyperHDR server reachable over the network (HyperHDR v20+; verified live against v22)
-- Home Assistant 2025.1 or newer
+- Home Assistant 2026.1 or newer
