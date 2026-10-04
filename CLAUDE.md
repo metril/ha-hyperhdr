@@ -51,6 +51,7 @@ tests/
 ├── test_entity_bases.py   (155)  Server/instance base entity classes
 ├── test_sensor.py         (139)  value_fn/attrs_fn evaluation for each sensor description
 ├── test_button.py          (70)  Press behavior and error wrapping
+├── test_translations.py            Translation-key coverage: strings.json == en.json, every platform key present
 └── test_brightness_mapping.py (59)  HA brightness <-> HyperHDR luminanceGain mapping helpers
 ```
 

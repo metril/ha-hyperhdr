@@ -18,6 +18,8 @@ if TYPE_CHECKING:
 
     from .coordinator import HyperHdrConfigEntry, HyperHdrInstanceCoordinator
 
+PARALLEL_UPDATES = 0
+
 
 async def async_setup_entry(
     hass: HomeAssistant, entry: HyperHdrConfigEntry, async_add_entities: AddEntitiesCallback
@@ -47,7 +49,7 @@ def _entities_for_instance(
 class HyperHdrClearPriorityButton(HyperHdrInstanceEntity, ButtonEntity):
     """Clear this integration's own priority (``runtime_data.default_priority``)."""
 
-    _attr_name = "Clear priority"
+    _attr_translation_key = "clear_priority"
 
     def __init__(self, coordinator: HyperHdrInstanceCoordinator, entry: HyperHdrConfigEntry, instance_id: int) -> None:
         """Initialize the button."""

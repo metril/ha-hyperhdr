@@ -16,8 +16,9 @@ duplicate-unique_id entity re-adds.
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
@@ -241,3 +242,6 @@ class HyperHdrRuntimeData:
     instance_coordinators: dict[int, HyperHdrInstanceCoordinator]
     default_priority: int
     hidden_effects: set[str]
+    # Serializes the instance-roster diff (reconnect, roster push, initial
+    # startup burst) so overlapping runs can never double-create an instance.
+    diff_lock: asyncio.Lock = field(default_factory=asyncio.Lock)

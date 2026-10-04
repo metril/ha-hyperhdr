@@ -29,6 +29,8 @@ _HDR_OPTIONS = ("off", "on")
 _HDR_OPTION_TO_MODE: dict[str, int] = {"off": HDR_MODE_OFF, "on": HDR_MODE_ON}
 _HDR_MODE_TO_OPTION: dict[int, str] = {mode: option for option, mode in _HDR_OPTION_TO_MODE.items()}
 
+PARALLEL_UPDATES = 0
+
 
 async def async_setup_entry(
     hass: HomeAssistant, entry: HyperHdrConfigEntry, async_add_entities: AddEntitiesCallback
@@ -67,7 +69,7 @@ class HyperHdrHdrToneMappingSelect(HyperHdrInstanceEntity, SelectEntity):
     """
 
     _attr_entity_category = EntityCategory.CONFIG
-    _attr_name = "HDR tone mapping"
+    _attr_translation_key = "hdr_tone_mapping"
     _attr_options = list(_HDR_OPTIONS)
 
     def __init__(self, coordinator: HyperHdrInstanceCoordinator, entry: HyperHdrConfigEntry, instance_id: int) -> None:
@@ -103,7 +105,7 @@ class HyperHdrPrioritySourceSelect(HyperHdrInstanceEntity, SelectEntity):
     No entity_category -- this is a primary control, not config/diagnostic.
     """
 
-    _attr_name = "Priority source"
+    _attr_translation_key = "priority_source"
 
     def __init__(self, coordinator: HyperHdrInstanceCoordinator, entry: HyperHdrConfigEntry, instance_id: int) -> None:
         """Initialize the priority source select."""

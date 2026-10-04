@@ -125,6 +125,36 @@ class TestAsyncSetupEntryHappyPath:
         assert runtime.hidden_effects == {"Rainbow swirl fast"}
 
 
+class TestAsyncSetupEntrySetupFailureCleanup:
+    async def test_forward_failure_stops_every_client_and_reraises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        hass = FakeHass()
+        entry = _entry()
+        clients = _patch_server_client(
+            monkeypatch, connect_info={"instance": [{"instance": 1, "friendly_name": "A", "running": True}]}
+        )
+        instance_clients: list[FakeInstanceClient] = []
+
+        async def _factory(hass: Any, entry: Any, instance_id: int) -> FakeInstanceClient:
+            c = FakeInstanceClient(instance_id)
+            instance_clients.append(c)
+            return c
+
+        monkeypatch.setattr(hyperhdr, "_async_create_instance_client", _factory)
+
+        async def _boom(*args: Any, **kwargs: Any) -> None:
+            raise RuntimeError("forward failed")
+
+        monkeypatch.setattr(hass.config_entries, "async_forward_entry_setups", _boom)
+
+        with pytest.raises(RuntimeError, match="forward failed"):
+            await hyperhdr.async_setup_entry(hass, entry)  # type: ignore[arg-type]
+
+        assert clients[0].stop_calls == 1
+        assert [c.stop_calls for c in instance_clients] == [1]
+        # A retried setup must take the first-connect path, not the reconnect path.
+        assert not hasattr(entry, "runtime_data")
+
+
 class TestAsyncSetupEntryConnectFailure:
     async def test_timeout_raises_config_entry_not_ready_and_stops_client(
         self, monkeypatch: pytest.MonkeyPatch
@@ -278,6 +308,36 @@ class TestServerReconnectViaOnConnected:
         assert runtime.server_coordinator.data.instances.keys() == {1}
 
 
+class TestReconnectSysinfoFailure:
+    async def test_sysinfo_connection_error_still_reconciles(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from custom_components.hyperhdr.exceptions import HyperHdrConnectionError
+
+        hass = FakeHass()
+        entry = _entry()
+        clients = _patch_server_client(
+            monkeypatch, connect_info={"instance": [{"instance": 1, "friendly_name": "A", "running": True}]}
+        )
+
+        async def _fake_instance_factory(hass: Any, entry: Any, instance_id: int) -> FakeInstanceClient:
+            return FakeInstanceClient(instance_id)
+
+        monkeypatch.setattr(hyperhdr, "_async_create_instance_client", _fake_instance_factory)
+        await hyperhdr.async_setup_entry(hass, entry)  # type: ignore[arg-type]
+        runtime = entry.runtime_data  # type: ignore[attr-defined]
+        old_sysinfo = runtime.server_coordinator.data.sysinfo
+
+        async def _raise() -> Any:
+            raise HyperHdrConnectionError("down")
+
+        monkeypatch.setattr(clients[0], "async_sysinfo", _raise)
+        await clients[0].on_connected({"instance": []})
+
+        assert runtime.server_coordinator.data.sysinfo is old_sysinfo
+        assert runtime.server_coordinator.data.instances == {}
+        assert runtime.server_coordinator.data.connected is True
+        assert 1 not in runtime.instance_coordinators
+
+
 class TestServerDisconnectViaOnDisconnected:
     async def test_server_only_disconnect_leaves_unaffected_instance_connected(
         self, monkeypatch: pytest.MonkeyPatch
@@ -365,6 +425,27 @@ class TestAsyncUnloadEntry:
         assert instance_client.stop_calls == 1
         assert clients[0].stop_calls == 1
         assert hass.config_entries.unload_calls == [(entry, hyperhdr.PLATFORMS)]
+
+    async def test_platform_unload_failure_returns_false_without_stopping_clients(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        hass = FakeHass()
+        entry = _entry()
+        clients = _patch_server_client(monkeypatch)
+        await hyperhdr.async_setup_entry(hass, entry)  # type: ignore[arg-type]
+        hass.config_entries.unload_result = False
+
+        assert await hyperhdr.async_unload_entry(hass, entry) is False  # type: ignore[arg-type]
+        assert clients[0].stop_calls == 0
+
+    async def test_services_survive_last_entry_unload(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        hass = FakeHass()
+        entry = _entry()
+        _patch_server_client(monkeypatch)
+        await hyperhdr.async_setup(hass, {})  # type: ignore[arg-type]
+        await hyperhdr.async_setup_entry(hass, entry)  # type: ignore[arg-type]
+        await hyperhdr.async_unload_entry(hass, entry)  # type: ignore[arg-type]
+        assert hass.services.has_service("hyperhdr", "set_color")
 
     async def test_idempotent_when_clients_already_stopped(self, monkeypatch: pytest.MonkeyPatch) -> None:
         hass = FakeHass()

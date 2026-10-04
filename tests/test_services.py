@@ -27,7 +27,6 @@ from custom_components.hyperhdr.services import (
     _handle_set_color,
     _handle_set_effect,
     async_setup_services,
-    async_unload_services,
     resolve_instance_target,
 )
 
@@ -183,7 +182,7 @@ class TestClearService:
             await _handle_clear(call)  # type: ignore[arg-type]
 
 
-class TestSetupAndUnloadServices:
+class TestSetupServices:
     async def test_setup_registers_all_three_services_and_is_idempotent(self) -> None:
         hass = FakeHass()
         await async_setup_services(hass)  # type: ignore[arg-type]
@@ -192,18 +191,6 @@ class TestSetupAndUnloadServices:
         assert hass.services.has_service(DOMAIN, SERVICE_CLEAR)
 
         await async_setup_services(hass)  # type: ignore[arg-type]  # must not raise/duplicate
-
-    async def test_unload_removes_all_three_services(self) -> None:
-        hass = FakeHass()
-        await async_setup_services(hass)  # type: ignore[arg-type]
-        async_unload_services(hass)  # type: ignore[arg-type]
-        assert not hass.services.has_service(DOMAIN, SERVICE_SET_COLOR)
-        assert not hass.services.has_service(DOMAIN, SERVICE_SET_EFFECT)
-        assert not hass.services.has_service(DOMAIN, SERVICE_CLEAR)
-
-    def test_unload_before_setup_does_not_raise(self) -> None:
-        hass = FakeHass()
-        async_unload_services(hass)  # type: ignore[arg-type]
 
     async def test_registered_service_end_to_end_via_hass_services_async_call(self) -> None:
         """Through hass.services.async_call (schema + handler together),

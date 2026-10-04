@@ -175,11 +175,3 @@ async def async_setup_services(hass: HomeAssistant) -> None:
     hass.services.async_register(DOMAIN, SERVICE_SET_COLOR, _handle_set_color, schema=_SCHEMA_SET_COLOR)
     hass.services.async_register(DOMAIN, SERVICE_SET_EFFECT, _handle_set_effect, schema=_SCHEMA_SET_EFFECT)
     hass.services.async_register(DOMAIN, SERVICE_CLEAR, _handle_clear, schema=_SCHEMA_CLEAR)
-
-
-def async_unload_services(hass: HomeAssistant) -> None:
-    """Unregister HyperHDR services (idempotent). Called once the last
-    loaded config entry for this domain unloads."""
-    for service in (SERVICE_SET_COLOR, SERVICE_SET_EFFECT, SERVICE_CLEAR):
-        if hass.services.has_service(DOMAIN, service):
-            hass.services.async_remove(DOMAIN, service)

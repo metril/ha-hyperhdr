@@ -117,6 +117,25 @@
       }
     }
   },
+  "entity": {
+    "button": { "clear_priority": { "name": "Clear priority" } },
+    "camera": { "led_preview": { "name": "LED preview" } },
+    "select": {
+      "hdr_tone_mapping": { "name": "HDR tone mapping" },
+      "priority_source": { "name": "Priority source" }
+    },
+    "switch": {
+      "running": { "name": "Running" },
+      "all": { "name": "All instances (global)" },
+      "hdr": { "name": "HDR tone mapping" },
+      "smoothing": { "name": "Smoothing" },
+      "blackborder": { "name": "Blackborder detection" },
+      "forwarder": { "name": "Forwarder" },
+      "videograbber": { "name": "USB capture" },
+      "systemgrabber": { "name": "Screen capture" },
+      "leddevice": { "name": "LED device" }
+    }
+  },
   "services": {
     "set_color": {
       "name": "Set color",
