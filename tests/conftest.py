@@ -14,6 +14,7 @@ existing client/model tests keep resolving to the real ``client.py``/
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import sys
 import types
@@ -21,6 +22,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import aiohttp
+import voluptuous as vol
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
@@ -351,7 +353,8 @@ class FakeConfigEntry:
 class FakeEntityEntry:
     """Stand-in for ``homeassistant.helpers.entity_registry.RegistryEntry``."""
 
-    def __init__(self, entity_id: str, unique_id: str, config_entry_id: str) -> None:
+    def __init__(self, entity_id: str, unique_id: str, config_entry_id: str, device_id: str | None = None) -> None:
+        self.device_id = device_id
         self.entity_id = entity_id
         self.unique_id = unique_id
         self.config_entry_id = config_entry_id
@@ -362,10 +365,15 @@ class FakeEntityRegistry:
         self.entities: dict[str, FakeEntityEntry] = {}
         self.removed: list[str] = []
 
-    def add(self, entity_id: str, unique_id: str, config_entry_id: str) -> FakeEntityEntry:
-        entry = FakeEntityEntry(entity_id, unique_id, config_entry_id)
+    def add(
+        self, entity_id: str, unique_id: str, config_entry_id: str, device_id: str | None = None
+    ) -> FakeEntityEntry:
+        entry = FakeEntityEntry(entity_id, unique_id, config_entry_id, device_id)
         self.entities[entity_id] = entry
         return entry
+
+    def async_get(self, entity_id: str) -> FakeEntityEntry | None:
+        return self.entities.get(entity_id)
 
     def async_remove(self, entity_id: str) -> None:
         """Instance method (matches the real ``EntityRegistry.async_remove``
@@ -523,6 +531,7 @@ class FakeHass:
         self.entity_registry = FakeEntityRegistry()
         self.device_registry = FakeDeviceRegistry()
         self.services = FakeServices(self)
+        self.area_devices: dict[str, set[str]] = {}
         self.client_session = object()
         self.insecure_client_session = object()
         self.dispatcher_calls: dict[str, list[tuple[Any, ...]]] = {}
@@ -827,8 +836,61 @@ def _stub_homeassistant() -> None:
     )
     ha_helpers.dispatcher = ha_dispatcher
 
+    def _ensure_list(value: Any) -> list[Any]:
+        return [] if value is None else value if isinstance(value, list) else [value]
+
+    class TargetSelection:
+        """Fake of helpers.target.TargetSelection."""
+
+        def __init__(self, config: Any) -> None:
+            self.entity_ids = set(_ensure_list(config.get("entity_id")))
+            self.device_ids = set(_ensure_list(config.get("device_id")))
+            self.area_ids = set(_ensure_list(config.get("area_id")))
+            self.floor_ids = set(_ensure_list(config.get("floor_id")))
+            self.label_ids = set(_ensure_list(config.get("label_id")))
+
+    @dataclasses.dataclass
+    class SelectedEntities:
+        referenced: set[str] = dataclasses.field(default_factory=set)
+        indirectly_referenced: set[str] = dataclasses.field(default_factory=set)
+        missing_devices: set[str] = dataclasses.field(default_factory=set)
+        missing_areas: set[str] = dataclasses.field(default_factory=set)
+        missing_floors: set[str] = dataclasses.field(default_factory=set)
+        missing_labels: set[str] = dataclasses.field(default_factory=set)
+        referenced_devices: set[str] = dataclasses.field(default_factory=set)
+        referenced_areas: set[str] = dataclasses.field(default_factory=set)
+
+    def _extract_referenced_entity_ids(hass: Any, target_selection: Any) -> SelectedEntities:
+        """Sync fake of helpers.target.async_extract_referenced_entity_ids.
+
+        Like the real one, an area expands to the devices/entities registered
+        in it (``FakeHass.area_devices``: area id -> device ids).
+        """
+        devices = set(target_selection.device_ids)
+        for area in target_selection.area_ids:
+            devices |= set(getattr(hass, "area_devices", {}).get(area, ()))
+        referenced = set(target_selection.entity_ids)
+        indirect = {e.entity_id for e in hass.entity_registry.entities.values() if e.device_id in devices}
+        return SelectedEntities(
+            referenced=referenced,
+            indirectly_referenced=indirect - referenced,
+            referenced_devices=devices,
+            referenced_areas=set(target_selection.area_ids),
+        )
+
+    ha_target = _make_module(
+        "homeassistant.helpers.target",
+        TargetSelection=TargetSelection,
+        async_extract_referenced_entity_ids=_extract_referenced_entity_ids,
+    )
+    ha_helpers.target = ha_target
+    sys.modules["homeassistant.helpers.target"] = ha_target
+
     ha_cv = _make_module(
         "homeassistant.helpers.config_validation",
+        ENTITY_SERVICE_FIELDS={
+            vol.Optional(k): _ensure_list for k in ("entity_id", "device_id", "area_id", "floor_id", "label_id")
+        },
         config_entry_only_config_schema=lambda domain: lambda cfg: cfg,
     )
     ha_helpers.config_validation = ha_cv

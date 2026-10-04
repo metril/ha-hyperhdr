@@ -1,10 +1,9 @@
 set_color:
+  target:
+    entity:
+      integration: hyperhdr
+      domain: light
   fields:
-    device_id:
-      required: true
-      selector:
-        device:
-          integration: hyperhdr
     rgb_color:
       required: true
       selector:
@@ -26,12 +25,11 @@ set_color:
           mode: box
 
 set_effect:
+  target:
+    entity:
+      integration: hyperhdr
+      domain: light
   fields:
-    device_id:
-      required: true
-      selector:
-        device:
-          integration: hyperhdr
     effect:
       required: true
       selector:
@@ -53,12 +51,11 @@ set_effect:
           mode: box
 
 clear:
+  target:
+    entity:
+      integration: hyperhdr
+      domain: light
   fields:
-    device_id:
-      required: true
-      selector:
-        device:
-          integration: hyperhdr
     priority:
       required: true
       selector:
