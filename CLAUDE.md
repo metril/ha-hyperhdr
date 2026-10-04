@@ -1,7 +1,7 @@
 # ha-hyperhdr
 
 Home Assistant custom integration for [HyperHDR](https://github.com/awawa-dev/HyperHDR) ambient lighting.
-**Version:** 0.1.0 | **Domain:** `hyperhdr` | **IoT Class:** `local_push`
+**Version:** 0.2.0 | **Domain:** `hyperhdr` | **IoT Class:** `local_push`
 
 ## Project Structure
 
