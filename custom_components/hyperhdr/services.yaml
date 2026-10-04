@@ -1,7 +1,5 @@
 set_color:
   target:
-    device:
-      integration: hyperhdr
     entity:
       integration: hyperhdr
       domain: light
@@ -28,8 +26,6 @@ set_color:
 
 set_effect:
   target:
-    device:
-      integration: hyperhdr
     entity:
       integration: hyperhdr
       domain: light
@@ -56,8 +52,6 @@ set_effect:
 
 clear:
   target:
-    device:
-      integration: hyperhdr
     entity:
       integration: hyperhdr
       domain: light
