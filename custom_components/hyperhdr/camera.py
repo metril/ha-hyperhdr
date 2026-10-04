@@ -62,6 +62,8 @@ _JPEG_QUALITY = 80
 # MJPEG stream throttle -- see handle_async_mjpeg_stream.
 _MJPEG_MIN_FRAME_INTERVAL = 0.1  # ~10 fps
 
+PARALLEL_UPDATES = 0
+
 
 async def async_setup_entry(
     hass: HomeAssistant, entry: HyperHdrConfigEntry, async_add_entities: AddEntitiesCallback
@@ -284,7 +286,14 @@ class _HyperHdrCameraBase(HyperHdrInstanceEntity, Camera):
 
             last_sent = 0.0
             while True:
-                frame = await queue.get()
+                try:
+                    frame = await asyncio.wait_for(queue.get(), timeout=1.0)
+                except TimeoutError:
+                    if self.coordinator.client is not client or not self.coordinator.data.connected:
+                        break
+                    continue
+                if self.coordinator.client is not client or not self.coordinator.data.connected:
+                    break
                 elapsed = time.monotonic() - last_sent
                 if elapsed < _MJPEG_MIN_FRAME_INTERVAL:
                     await asyncio.sleep(_MJPEG_MIN_FRAME_INTERVAL - elapsed)
@@ -295,6 +304,7 @@ class _HyperHdrCameraBase(HyperHdrInstanceEntity, Camera):
                     b"Content-Length: " + str(len(jpeg)).encode() + b"\r\n\r\n" + jpeg + b"\r\n"
                 )
                 last_sent = time.monotonic()
+            return response
         finally:
             await client.stop_ledstream(_on_frame)
 
@@ -302,7 +312,7 @@ class _HyperHdrCameraBase(HyperHdrInstanceEntity, Camera):
 class HyperHdrLedPreviewCamera(_HyperHdrCameraBase):
     """Renders the live LED layout: each LED as its own rectangle."""
 
-    _attr_name = "LED preview"
+    _attr_translation_key = "led_preview"
 
     def __init__(self, coordinator: HyperHdrInstanceCoordinator, entry: HyperHdrConfigEntry, instance_id: int) -> None:
         """Initialize the LED preview camera."""

@@ -54,6 +54,8 @@ if TYPE_CHECKING:
     from .client import HyperHdrServerClient
     from .coordinator import HyperHdrConfigEntry, HyperHdrInstanceCoordinator, HyperHdrServerCoordinator
 
+PARALLEL_UPDATES = 0
+
 
 async def async_setup_entry(
     hass: HomeAssistant, entry: HyperHdrConfigEntry, async_add_entities: AddEntitiesCallback
@@ -125,7 +127,10 @@ class HyperHdrComponentSwitch(HyperHdrInstanceEntity, SwitchEntity):
         """Initialize the component switch."""
         super().__init__(coordinator, entry, instance_id, f"component_{component_name.lower()}")
         self._component_name = component_name
-        self._attr_name = COMPONENT_LABELS.get(component_name, component_name.title())
+        if component_name in COMPONENT_LABELS:
+            self._attr_translation_key = component_name.lower()
+        else:
+            self._attr_name = component_name.title()
         self._attr_icon = COMPONENT_ICONS.get(component_name)
 
     @property
@@ -160,7 +165,7 @@ class HyperHdrRunningSwitch(HyperHdrServerEntity, SwitchEntity):
     module docstring.
     """
 
-    _attr_name = "Running"
+    _attr_translation_key = "running"
     _attr_icon = "mdi:play-circle-outline"
 
     def __init__(self, coordinator: HyperHdrServerCoordinator, entry: HyperHdrConfigEntry, instance_id: int) -> None:

@@ -320,6 +320,11 @@ class FakeConfigEntry:
         self.update_listeners.append(listener)
         return lambda: self.update_listeners.remove(listener)
 
+    def async_create_background_task(
+        self, hass: Any, coro: Any, name: str, eager_start: bool = True
+    ) -> asyncio.Task[Any]:
+        return hass.async_create_task(coro, name)
+
     def async_start_reauth(self, hass: Any) -> None:
         self.reauth_started = True
 
@@ -428,6 +433,7 @@ class _FakeConfigEntriesManager:
     def __init__(self) -> None:
         self.forward_calls: list[tuple[Any, list[Any]]] = []
         self.unload_calls: list[tuple[Any, list[Any]]] = []
+        self.unload_result = True
         self.reload_calls: list[str] = []
         self.entries: list[Any] = []
 
@@ -436,7 +442,7 @@ class _FakeConfigEntriesManager:
 
     async def async_unload_platforms(self, entry: Any, platforms: Iterable[Any]) -> bool:
         self.unload_calls.append((entry, list(platforms)))
-        return True
+        return self.unload_result
 
     async def async_reload(self, entry_id: str) -> None:
         self.reload_calls.append(entry_id)
@@ -821,6 +827,12 @@ def _stub_homeassistant() -> None:
     )
     ha_helpers.dispatcher = ha_dispatcher
 
+    ha_cv = _make_module(
+        "homeassistant.helpers.config_validation",
+        config_entry_only_config_schema=lambda domain: lambda cfg: cfg,
+    )
+    ha_helpers.config_validation = ha_cv
+
     def _async_get_clientsession(hass: Any, verify_ssl: bool = True, **kwargs: Any) -> Any:
         return hass.client_session if verify_ssl else hass.insecure_client_session
 
@@ -1056,6 +1068,7 @@ def _stub_homeassistant() -> None:
     sys.modules["homeassistant.helpers.entity_registry"] = ha_er
     sys.modules["homeassistant.helpers.dispatcher"] = ha_dispatcher
     sys.modules["homeassistant.helpers.aiohttp_client"] = ha_ac
+    sys.modules["homeassistant.helpers.config_validation"] = ha_cv
     sys.modules["homeassistant.helpers.selector"] = ha_selector
     sys.modules["homeassistant.helpers.entity"] = ha_entity
     sys.modules["homeassistant.components"] = ha_components

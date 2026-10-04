@@ -195,3 +195,61 @@ class TestEntitiesForInstanceLedGeometryGuard:
         assert len(entities) == 1
         assert isinstance(entities[0], HyperHdrLedPreviewCamera)
         assert entities[0]._attr_entity_registry_enabled_default is False  # noqa: SLF001
+
+
+class _FakeStreamResponse:
+    def __init__(self) -> None:
+        self.content_type = ""
+        self.writes: list[bytes] = []
+
+    async def prepare(self, request: Any) -> None:
+        return None
+
+    async def write(self, data: bytes) -> None:
+        self.writes.append(data)
+
+
+class _FakeLedClient:
+    def __init__(self) -> None:
+        self.started: list[Any] = []
+        self.stopped: list[Any] = []
+
+    async def start_ledstream(self, cb: Any) -> None:
+        self.started.append(cb)
+
+    async def stop_ledstream(self, cb: Any) -> None:
+        self.stopped.append(cb)
+
+
+class TestMjpegStreamExit:
+    async def _run(self, monkeypatch: Any, detach: bool) -> _FakeLedClient:
+        import asyncio
+
+        from custom_components.hyperhdr import camera as camera_mod
+
+        monkeypatch.setattr(camera_mod.web, "StreamResponse", _FakeStreamResponse)
+        entry, coordinator = _make_setup()
+        coordinator.async_set_updated_data(_instance_data(led_geometry=tuple(_row_geometry(2))))
+        client = _FakeLedClient()
+        coordinator.client = client  # type: ignore[assignment]
+        entity = HyperHdrLedPreviewCamera(coordinator, entry, 1)  # type: ignore[arg-type]
+
+        task = asyncio.ensure_future(entity.handle_async_mjpeg_stream(object()))  # type: ignore[arg-type]
+        for _ in range(5):
+            await asyncio.sleep(0)
+        assert client.started and not task.done()
+
+        if detach:
+            coordinator.client = None
+        else:
+            coordinator.async_set_updated_data(_instance_data(connected=False, led_geometry=tuple(_row_geometry(2))))
+        await asyncio.wait_for(task, timeout=3.0)
+        return client
+
+    async def test_exits_when_disconnected(self, monkeypatch: Any) -> None:
+        client = await self._run(monkeypatch, detach=False)
+        assert len(client.stopped) == 1
+
+    async def test_exits_when_client_detached(self, monkeypatch: Any) -> None:
+        client = await self._run(monkeypatch, detach=True)
+        assert len(client.stopped) == 1

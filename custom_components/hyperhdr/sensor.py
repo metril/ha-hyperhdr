@@ -97,6 +97,8 @@ SERVER_SENSORS: tuple[HyperHdrSensorDescription, ...] = (
     ),
 )
 
+PARALLEL_UPDATES = 0
+
 
 async def async_setup_entry(
     hass: HomeAssistant, entry: HyperHdrConfigEntry, async_add_entities: AddEntitiesCallback

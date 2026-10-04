@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 from homeassistant.const import CONF_HOST, CONF_PORT, Platform
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -46,8 +47,9 @@ from .const import (
 )
 from .coordinator import HyperHdrInstanceCoordinator, HyperHdrRuntimeData, HyperHdrServerCoordinator, _diff_instances
 from .entity import server_device_info, server_uid
+from .exceptions import HyperHdrConnectionError
 from .models import HyperHdrServerData
-from .services import async_setup_services, async_unload_services
+from .services import async_setup_services
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -72,19 +74,13 @@ PLATFORMS: list[Platform] = [
 # its own timeout; this just accounts for scheduling/auth-roundtrip slack.
 _CONNECT_WAIT_MARGIN = 5.0
 
-# One lock per config entry, guarding _async_handle_instance_diff so
-# overlapping diff runs (e.g. a push arriving while a reconnect's own
-# reconciliation is still in flight) can never double-create an instance
-# client/coordinator.
-_diff_locks: dict[str, asyncio.Lock] = {}
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 
-def _get_diff_lock(entry_id: str) -> asyncio.Lock:
-    lock = _diff_locks.get(entry_id)
-    if lock is None:
-        lock = asyncio.Lock()
-        _diff_locks[entry_id] = lock
-    return lock
+async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
+    """Register domain-wide services once (they outlive any single config entry)."""
+    await async_setup_services(hass)
+    return True
 
 
 def _get_session(hass: HomeAssistant, entry: HyperHdrConfigEntry) -> Any:
@@ -156,7 +152,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: HyperHdrConfigEntry) -> 
         # (below) needs to read it as the pre-reconnect roster to compute
         # what changed while disconnected. It updates `instances` itself.
         runtime = entry.runtime_data
-        sysinfo = await runtime.server_client.async_sysinfo()
+        try:
+            sysinfo = await runtime.server_client.async_sysinfo()
+        except HyperHdrConnectionError:
+            current = runtime.server_coordinator.data
+            sysinfo = current.sysinfo if current is not None else {}
         roster = HyperHdrServerData.instances_from_roster(info.get("instance", []))
         if runtime.server_coordinator.data is not None:
             runtime.server_coordinator.async_set_updated_data(
@@ -205,7 +205,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: HyperHdrConfigEntry) -> 
             # to drop.
             return
         roster = HyperHdrServerData.instances_from_roster(frame.get("data", []))
-        hass.async_create_task(_async_handle_instance_diff(hass, entry, roster))
+        entry.async_create_background_task(
+            hass,
+            _async_handle_instance_diff(hass, entry, roster),
+            f"{DOMAIN}_instance_diff_{entry.entry_id}",
+        )
 
     client = HyperHdrServerClient(
         session,
@@ -234,61 +238,72 @@ async def async_setup_entry(hass: HomeAssistant, entry: HyperHdrConfigEntry) -> 
         await client.stop()
         raise ConfigEntryAuthFailed("authentication failed while connecting to HyperHDR")
 
-    sysinfo = await client.async_sysinfo()
-    roster = HyperHdrServerData.instances_from_roster(last_connect_info.get("instance", []))
+    try:
+        sysinfo = await client.async_sysinfo()
+        roster = HyperHdrServerData.instances_from_roster(last_connect_info.get("instance", []))
 
-    server_coordinator = HyperHdrServerCoordinator(hass, entry, client)
-    server_coordinator.async_set_updated_data(HyperHdrServerData(sysinfo=sysinfo, instances=roster, connected=True))
+        server_coordinator = HyperHdrServerCoordinator(hass, entry, client)
+        server_coordinator.async_set_updated_data(HyperHdrServerData(sysinfo=sysinfo, instances=roster, connected=True))
 
-    entry.runtime_data = HyperHdrRuntimeData(
-        server_client=client,
-        server_coordinator=server_coordinator,
-        instance_coordinators={},
-        default_priority=options.get(OPT_DEFAULT_PRIORITY, DEFAULT_PRIORITY),
-        hidden_effects=set(options.get(OPT_HIDDEN_EFFECTS, [])),
-    )
-
-    # Explicitly register the server device before any entities exist --
-    # instance-scoped entities' via_device points at it, and
-    # async_forward_entry_setups sets platforms up concurrently, so nothing
-    # otherwise guarantees a server-scoped entity (whose own device_info
-    # would incidentally create it) gets added first. Idempotent -- a later
-    # `HyperHdrServerEntity` (e.g. sensor.py's version sensor) resolves to
-    # the same device via the same identifiers.
-    dr.async_get(hass).async_get_or_create(
-        config_entry_id=entry.entry_id, **server_device_info(server_coordinator, entry)
-    )
-
-    # Cleanup for installs that predate FIRST_INSTANCE_ID handling: releases
-    # <= 0.1.1 created a "Running" switch for instance 0, which HyperHDR
-    # forbids ever stopping (see const.FIRST_INSTANCE_ID) -- switch.py no
-    # longer builds it, so drop the dead registry entry it left behind.
-    stale_running_uid = f"{server_uid(entry)}_{FIRST_INSTANCE_ID}_running"
-    entity_registry = er.async_get(hass)
-    for entity_entry in er.async_entries_for_config_entry(entity_registry, entry.entry_id):
-        if entity_entry.unique_id == stale_running_uid:
-            entity_registry.async_remove(entity_entry.entity_id)
-
-    # Held for the whole initial-instance startup burst below, not just a
-    # single call -- the same lock a later push-triggered reconciliation
-    # (_async_handle_instance_diff) acquires, so a push landing in the
-    # narrow window after runtime_data is assigned (above) but before this
-    # burst finishes blocks until it's done rather than racing it to
-    # double-create a client/coordinator for the same instance id.
-    running_ids = [instance_id for instance_id, summary in roster.items() if summary.running]
-    async with _get_diff_lock(entry.entry_id):
-        results = await asyncio.gather(
-            *(_async_start_instance(hass, entry, instance_id) for instance_id in running_ids),
-            return_exceptions=True,
+        entry.runtime_data = HyperHdrRuntimeData(
+            server_client=client,
+            server_coordinator=server_coordinator,
+            instance_coordinators={},
+            default_priority=options.get(OPT_DEFAULT_PRIORITY, DEFAULT_PRIORITY),
+            hidden_effects=set(options.get(OPT_HIDDEN_EFFECTS, [])),
         )
-    for instance_id, result in zip(running_ids, results, strict=True):
-        if isinstance(result, BaseException):
-            _LOGGER.warning("failed to connect to instance %s during setup: %s", instance_id, result)
 
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    entry.async_on_unload(entry.add_update_listener(_async_update_listener))
-    # Registered once for the whole domain, not per entry -- has_service-guarded.
-    await async_setup_services(hass)
+        # Explicitly register the server device before any entities exist --
+        # instance-scoped entities' via_device points at it, and
+        # async_forward_entry_setups sets platforms up concurrently, so nothing
+        # otherwise guarantees a server-scoped entity (whose own device_info
+        # would incidentally create it) gets added first. Idempotent -- a later
+        # `HyperHdrServerEntity` (e.g. sensor.py's version sensor) resolves to
+        # the same device via the same identifiers.
+        dr.async_get(hass).async_get_or_create(
+            config_entry_id=entry.entry_id, **server_device_info(server_coordinator, entry)
+        )
+
+        # Cleanup for installs that predate FIRST_INSTANCE_ID handling: releases
+        # <= 0.1.1 created a "Running" switch for instance 0, which HyperHDR
+        # forbids ever stopping (see const.FIRST_INSTANCE_ID) -- switch.py no
+        # longer builds it, so drop the dead registry entry it left behind.
+        stale_running_uid = f"{server_uid(entry)}_{FIRST_INSTANCE_ID}_running"
+        entity_registry = er.async_get(hass)
+        for entity_entry in er.async_entries_for_config_entry(entity_registry, entry.entry_id):
+            if entity_entry.unique_id == stale_running_uid:
+                entity_registry.async_remove(entity_entry.entity_id)
+
+        # Held for the whole initial-instance startup burst below, not just a
+        # single call -- the same lock a later push-triggered reconciliation
+        # (_async_handle_instance_diff) acquires, so a push landing in the
+        # narrow window after runtime_data is assigned (above) but before this
+        # burst finishes blocks until it's done rather than racing it to
+        # double-create a client/coordinator for the same instance id.
+        running_ids = [instance_id for instance_id, summary in roster.items() if summary.running]
+        async with entry.runtime_data.diff_lock:
+            results = await asyncio.gather(
+                *(_async_start_instance(hass, entry, instance_id) for instance_id in running_ids),
+                return_exceptions=True,
+            )
+        for instance_id, result in zip(running_ids, results, strict=True):
+            if isinstance(result, BaseException):
+                _LOGGER.warning("failed to connect to instance %s during setup: %s", instance_id, result)
+
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+        entry.async_on_unload(entry.add_update_listener(_async_update_listener))
+    except BaseException:
+        runtime = getattr(entry, "runtime_data", None)
+        if runtime is not None:
+            for instance_coordinator in runtime.instance_coordinators.values():
+                if instance_coordinator.client is not None:
+                    await instance_coordinator.client.stop()
+            # Drop runtime_data so a retried setup takes the first-connect path
+            # instead of the reconnect path against the stopped clients.
+            del entry.runtime_data
+        await client.stop()
+        raise
+
     return True
 
 
@@ -300,6 +315,8 @@ async def _async_update_listener(hass: HomeAssistant, entry: HyperHdrConfigEntry
 async def async_unload_entry(hass: HomeAssistant, entry: HyperHdrConfigEntry) -> bool:
     """Unload a config entry. Idempotent -- safe even if clients are already stopped."""
     unload_ok: bool = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    if not unload_ok:
+        return False
 
     runtime = getattr(entry, "runtime_data", None)
     if runtime is not None:
@@ -307,16 +324,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: HyperHdrConfigEntry) ->
             if instance_coordinator.client is not None:
                 await instance_coordinator.client.stop()
         await runtime.server_client.stop()
-
-    _diff_locks.pop(entry.entry_id, None)
-
-    # This entry's own state is still LOADED/UNLOAD_IN_PROGRESS (not
-    # LOADED) at this point -- the framework flips it to NOT_LOADED only
-    # after this function returns -- so async_loaded_entries here already
-    # excludes it, and correctly reflects whether any *other* entry for
-    # this domain is still up.
-    if unload_ok and not hass.config_entries.async_loaded_entries(DOMAIN):
-        async_unload_services(hass)
 
     return unload_ok
 
@@ -328,7 +335,7 @@ async def _async_start_instance(hass: HomeAssistant, entry: HyperHdrConfigEntry,
     fired exactly once, at creation); an instance restarting reuses its existing,
     persistent coordinator -- only a fresh client is created and attached.
 
-    Invariant: every caller must hold ``_get_diff_lock(entry.entry_id)``
+    Invariant: every caller must hold ``entry.runtime_data.diff_lock``
     across the call -- both call sites do (``_async_handle_instance_diff``
     for reconnects/roster pushes, the initial startup burst in
     ``async_setup_entry``) -- so two overlapping calls for the same
@@ -385,7 +392,7 @@ async def _async_remove_instance(hass: HomeAssistant, entry: HyperHdrConfigEntry
             # EntityRegistry.async_remove is an instance method. The
             # previous call raised AttributeError every time an instance
             # was deleted from the server roster, silently swallowed by
-            # this being a fire-and-forget task (hass.async_create_task in
+            # this being a fire-and-forget task (entry.async_create_background_task in
             # the instance-update push handler) -- only surfaced as an
             # "Error doing job: Task exception was never retrieved" log
             # entry, never blocking the diff handler's own control flow.
@@ -403,11 +410,13 @@ async def _async_handle_instance_diff(
     """Reconcile a fresh instance roster against current state.
 
     Module-level with explicit args for testability. Serialized per config
-    entry via ``_get_diff_lock`` so overlapping calls (a push arriving mid
+    entry via ``runtime_data.diff_lock`` so overlapping calls (a push arriving mid
     reconciliation, say) can never double-create a client/coordinator.
     """
-    runtime = entry.runtime_data
-    async with _get_diff_lock(entry.entry_id):
+    runtime = getattr(entry, "runtime_data", None)
+    if runtime is None:
+        return
+    async with runtime.diff_lock:
         old_roster = runtime.server_coordinator.data.instances if runtime.server_coordinator.data else {}
         diff = _diff_instances(old_roster, new_roster)
 

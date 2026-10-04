@@ -122,7 +122,7 @@ class TestComponentSwitchDynamicBuild:
         # "All instances (global)" is HyperHDR's own web-UI label for ALL --
         # setting it pauses/resumes every instance on the server, so the name
         # must state that scope.
-        assert entities["ALL"]._attr_name == "All instances (global)"
+        assert entities["ALL"]._attr_translation_key == "all"
         assert entities["CUSTOMTHING"]._attr_name == "Customthing"
 
     async def test_icons_from_component_icons_with_no_icon_fallback(self) -> None:
