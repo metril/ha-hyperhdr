@@ -107,5 +107,3 @@ HyperHdrServerCoordinator          HyperHdrInstanceCoordinator x N
 ## Rules
 
 - **Never commit `docs/`** -- API recon notes and phase reports are local working files (gitignored).
-- **Never mention AI/Claude** in commits or code.
-- **Git identity:** author `metril <1517921+metril@users.noreply.github.com>`.
