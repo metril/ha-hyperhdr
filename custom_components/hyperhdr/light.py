@@ -18,7 +18,6 @@ from homeassistant.components.light import (
     LightEntity,
     LightEntityFeature,
 )
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 
 from .const import (
@@ -29,7 +28,7 @@ from .const import (
     SIGNAL_INSTANCE_READY,
 )
 from .entity import HyperHdrInstanceEntity, require_instance_client
-from .exceptions import HyperHdrError
+from .exceptions import HyperHdrError, translated_error
 from .models import brightness_to_luminance_gain, luminance_gain_to_brightness
 
 if TYPE_CHECKING:
@@ -50,10 +49,15 @@ async def async_setup_entry(
     for instance_id, coordinator in runtime.instance_coordinators.items():
         entities.extend(_entities_for_instance(entry, coordinator, instance_id))
     async_add_entities(entities)
+    added: set[str | None] = {entity.unique_id for entity in entities}
 
     async def _add_for_instance(instance_id: int) -> None:
-        coordinator = runtime.instance_coordinators[instance_id]
-        async_add_entities(_entities_for_instance(entry, coordinator, instance_id))
+        coordinator = runtime.instance_coordinators.get(instance_id)
+        if coordinator is None:
+            return
+        fresh = [e for e in _entities_for_instance(entry, coordinator, instance_id) if e.unique_id not in added]
+        added.update(entity.unique_id for entity in fresh)
+        async_add_entities(fresh)
 
     entry.async_on_unload(
         async_dispatcher_connect(hass, f"{SIGNAL_INSTANCE_READY}_{entry.entry_id}", _add_for_instance)
@@ -70,6 +74,7 @@ class HyperHdrLight(HyperHdrInstanceEntity, LightEntity):
     """The primary light entity for one HyperHDR instance."""
 
     _attr_name = None
+    _attr_translation_key = "light"
     _attr_supported_color_modes = {ColorMode.RGB}
     _attr_color_mode = ColorMode.RGB
     _attr_supported_features = LightEntityFeature.EFFECT
@@ -153,7 +158,7 @@ class HyperHdrLight(HyperHdrInstanceEntity, LightEntity):
             if ATTR_RGB_COLOR in kwargs:
                 await client.async_set_color(kwargs[ATTR_RGB_COLOR], self._default_priority)
         except HyperHdrError as err:
-            raise HomeAssistantError(f"failed to turn on HyperHDR light: {err}") from err
+            raise translated_error("light_turn_on_failed", error=err) from err
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn off the light by disabling the LEDDEVICE component."""
@@ -161,4 +166,4 @@ class HyperHdrLight(HyperHdrInstanceEntity, LightEntity):
         try:
             await client.async_set_component(COMPONENT_LEDDEVICE, False)
         except HyperHdrError as err:
-            raise HomeAssistantError(f"failed to turn off HyperHDR light: {err}") from err
+            raise translated_error("light_turn_off_failed", error=err) from err

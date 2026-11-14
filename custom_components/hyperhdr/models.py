@@ -20,7 +20,7 @@ def _as_int(value: Any, default: int = 0) -> int:
         return default
     try:
         return int(value)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return default
 
 
@@ -30,7 +30,7 @@ def _as_optional_int(value: Any) -> int | None:
         return None
     try:
         return int(value)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
 
 
@@ -40,7 +40,7 @@ def _as_optional_float(value: Any) -> float | None:
         return None
     try:
         return float(value)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
 
 
@@ -179,7 +179,7 @@ class HyperHdrPriority:
             return None
         try:
             return (int(rgb[0]), int(rgb[1]), int(rgb[2]))
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return None
 
 

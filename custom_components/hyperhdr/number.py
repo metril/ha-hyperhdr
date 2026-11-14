@@ -9,18 +9,14 @@ doesn't expose.
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from homeassistant.components.number import NumberEntity, NumberEntityDescription
-from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import EntityCategory
 
-from .const import SIGNAL_INSTANCE_READY
-from .entity import HyperHdrInstanceEntity, require_instance_client, wait_for_connected_data
-from .exceptions import HyperHdrError
+from .entity import HyperHdrInstanceEntity, async_setup_connected_entities, require_instance_client
+from .exceptions import HyperHdrError, translated_error
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -29,7 +25,7 @@ if TYPE_CHECKING:
     from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
     from .coordinator import HyperHdrConfigEntry, HyperHdrInstanceCoordinator
-    from .models import HyperHdrAdjustment
+    from .models import HyperHdrAdjustment, HyperHdrInstanceData
 
 # Fields whose native value must round-trip as an int (the client sends
 # whatever Python value is passed straight through as JSON -- HyperHDR's own
@@ -61,7 +57,7 @@ class HyperHdrNumberDescription(NumberEntityDescription):
 NUMBERS: tuple[HyperHdrNumberDescription, ...] = (
     HyperHdrNumberDescription(
         key="luminance_gain",
-        name="Luminance gain",
+        translation_key="luminance_gain",
         raw_key="luminanceGain",
         field_name="luminance_gain",
         native_min_value=0.0,
@@ -71,7 +67,7 @@ NUMBERS: tuple[HyperHdrNumberDescription, ...] = (
     ),
     HyperHdrNumberDescription(
         key="saturation_gain",
-        name="Saturation gain",
+        translation_key="saturation_gain",
         raw_key="saturationGain",
         field_name="saturation_gain",
         native_min_value=0.0,
@@ -81,7 +77,7 @@ NUMBERS: tuple[HyperHdrNumberDescription, ...] = (
     ),
     HyperHdrNumberDescription(
         key="gamma",
-        name="Gamma",
+        translation_key="gamma",
         raw_key="gamma",
         field_name="gamma",
         native_min_value=0.1,
@@ -91,7 +87,7 @@ NUMBERS: tuple[HyperHdrNumberDescription, ...] = (
     ),
     HyperHdrNumberDescription(
         key="backlight_threshold",
-        name="Backlight threshold",
+        translation_key="backlight_threshold",
         raw_key="backlightThreshold",
         field_name="backlight_threshold",
         native_min_value=0.0,
@@ -101,7 +97,7 @@ NUMBERS: tuple[HyperHdrNumberDescription, ...] = (
     ),
     HyperHdrNumberDescription(
         key="temperature_red",
-        name="Temperature red",
+        translation_key="temperature_red",
         raw_key="temperatureRed",
         field_name="temperature_red",
         native_min_value=0,
@@ -111,7 +107,7 @@ NUMBERS: tuple[HyperHdrNumberDescription, ...] = (
     ),
     HyperHdrNumberDescription(
         key="temperature_green",
-        name="Temperature green",
+        translation_key="temperature_green",
         raw_key="temperatureGreen",
         field_name="temperature_green",
         native_min_value=0,
@@ -121,7 +117,7 @@ NUMBERS: tuple[HyperHdrNumberDescription, ...] = (
     ),
     HyperHdrNumberDescription(
         key="temperature_blue",
-        name="Temperature blue",
+        translation_key="temperature_blue",
         raw_key="temperatureBlue",
         field_name="temperature_blue",
         native_min_value=0,
@@ -138,37 +134,20 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: HyperHdrConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     """Set up HyperHDR number entities."""
-    runtime = entry.runtime_data
-    entity_lists = await asyncio.gather(
-        *(
-            _entities_for_instance(entry, coordinator, instance_id)
-            for instance_id, coordinator in runtime.instance_coordinators.items()
-        )
-    )
-    entities: list[HyperHdrAdjustmentNumber] = [number for sublist in entity_lists for number in sublist]
-    async_add_entities(entities)
-
-    async def _add_for_instance(instance_id: int) -> None:
-        coordinator = runtime.instance_coordinators[instance_id]
-        async_add_entities(await _entities_for_instance(entry, coordinator, instance_id))
-
-    entry.async_on_unload(
-        async_dispatcher_connect(hass, f"{SIGNAL_INSTANCE_READY}_{entry.entry_id}", _add_for_instance)
-    )
+    await async_setup_connected_entities(hass, entry, async_add_entities, _entities_for_data)
 
 
-async def _entities_for_instance(
-    entry: HyperHdrConfigEntry, coordinator: HyperHdrInstanceCoordinator, instance_id: int
+def _entities_for_data(
+    entry: HyperHdrConfigEntry, data: HyperHdrInstanceData, coordinator: HyperHdrInstanceCoordinator, instance_id: int
 ) -> list[HyperHdrAdjustmentNumber]:
-    """Build one number entity per adjustment field present in the live data.
+    """One number entity per adjustment field present in a *connected* snapshot.
 
-    Bounded-waits for a connected snapshot first (``wait_for_connected_data``)
-    -- see switch.py's identical rationale on ``_component_entities_for_instance``:
     ``coordinator.data.adjustment.raw`` is an empty placeholder until the
-    instance's client finishes connecting, and this presence check is a
-    one-time snapshot deciding which entities get created at all.
+    instance's client finishes connecting; ``async_setup_connected_entities``
+    only calls this with connected data (and again on later connected
+    updates, deduping by unique_id, so fields from a late snapshot still
+    get their entity).
     """
-    data = await wait_for_connected_data(coordinator)
     raw = data.adjustment.raw
     return [
         HyperHdrAdjustmentNumber(coordinator, entry, instance_id, description)
@@ -210,4 +189,4 @@ class HyperHdrAdjustmentNumber(HyperHdrInstanceEntity, NumberEntity):
         try:
             await client.async_set_adjustment(**{field_name: payload_value})
         except HyperHdrError as err:
-            raise HomeAssistantError(f"failed to set HyperHDR {field_name}: {err}") from err
+            raise translated_error("adjustment_failed", field=field_name, error=err) from err

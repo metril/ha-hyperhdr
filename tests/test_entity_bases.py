@@ -153,3 +153,17 @@ class TestHyperHdrInstanceEntity:
         entity = HyperHdrInstanceEntity(coordinator, entry, 1, "power")
         coordinator.last_update_success = False
         assert entity.available is False
+
+
+class TestServerEntityAvailability:
+    def test_available_requires_connected_server_data(self) -> None:
+        hass = FakeHass()
+        entry = FakeConfigEntry(entry_id="entry1", unique_id="srv-uid", data={"host": "10.0.0.5", "port": 8090})
+        coordinator = _server_coordinator(hass, entry, connected=True)
+        entity = HyperHdrServerEntity(coordinator, entry, "version")
+        assert entity.available is True
+
+        coordinator.async_set_updated_data(
+            HyperHdrServerData(sysinfo=coordinator.data.sysinfo, instances={}, connected=False)
+        )
+        assert entity.available is False

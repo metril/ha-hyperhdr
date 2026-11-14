@@ -127,7 +127,7 @@ async def async_validate_connection_with_session(
         sysinfo = await client.async_connect_once()
     except HyperHdrAuthError:
         return ValidationResult(error="invalid_auth", token_required=client.token_required)
-    except (HyperHdrConnectionError, aiohttp.ClientError, OSError, TimeoutError):
+    except HyperHdrConnectionError, aiohttp.ClientError, OSError, TimeoutError:
         return ValidationResult(error="cannot_connect", token_required=client.token_required)
     except HyperHdrError:
         # Any other protocol-level failure (e.g. HyperHdrApiError from a
@@ -225,6 +225,10 @@ def admin_schema(default: str = "") -> vol.Schema:
     )
 
 
+REAUTH_REMOVE_TOKEN = "remove_token"
+REAUTH_REMOVE_ADMIN_PASSWORD = "remove_admin_password"
+
+
 def reauth_schema(*, token_required: bool, token_default: str = "", admin_default: str = "") -> vol.Schema:
     """token + admin_password -- used by ``reauth_confirm``. The token
     field is ``Required`` only when the server currently demands one;
@@ -241,8 +245,32 @@ def reauth_schema(*, token_required: bool, token_default: str = "", admin_defaul
             vol.Optional(CONF_ADMIN_PASSWORD, default=admin_default): TextSelector(
                 TextSelectorConfig(type=TextSelectorType.PASSWORD)
             ),
+            vol.Optional(REAUTH_REMOVE_TOKEN, default=False): BooleanSelector(),
+            vol.Optional(REAUTH_REMOVE_ADMIN_PASSWORD, default=False): BooleanSelector(),
         }
     )
+
+
+def reauth_data(existing: Mapping[str, Any], user_input: Mapping[str, Any]) -> dict[str, Any]:
+    """The entry data a reauth submission results in.
+
+    A non-blank token/admin password replaces the stored one, a blank one
+    keeps it, and the ``remove_*`` checkboxes drop the key entirely (the
+    only way to clear a credential -- a blank field alone can't).
+    """
+    data = dict(existing)
+    for key, remove_key in ((CONF_TOKEN, REAUTH_REMOVE_TOKEN), (CONF_ADMIN_PASSWORD, REAUTH_REMOVE_ADMIN_PASSWORD)):
+        if user_input.get(remove_key):
+            data.pop(key, None)
+        elif user_input.get(key):
+            data[key] = user_input[key]
+    return data
+
+
+def udn_to_unique_id(udn: str) -> str:
+    """HyperHDR's SSDP UDN is ``uuid:<sysinfo id>`` (SSDPDescription.h);
+    the config entry's unique_id is the bare sysinfo id."""
+    return udn.removeprefix("uuid:")
 
 
 def options_schema(current: Mapping[str, Any], effect_options: list[str]) -> vol.Schema:

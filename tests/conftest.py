@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import enum
 import json
 import sys
 import types
@@ -279,6 +280,14 @@ def _make_module(name: str, **attrs: Any) -> types.ModuleType:
     return mod
 
 
+class FakeConfigEntryState(enum.Enum):
+    """Stand-in for ``homeassistant.config_entries.ConfigEntryState``."""
+
+    LOADED = "loaded"
+    NOT_LOADED = "not_loaded"
+    SETUP_IN_PROGRESS = "setup_in_progress"
+
+
 class FakeConfigEntry:
     """Stand-in for ``homeassistant.config_entries.ConfigEntry``.
 
@@ -298,7 +307,7 @@ class FakeConfigEntry:
         data: dict[str, Any] | None = None,
         options: dict[str, Any] | None = None,
         domain: str = "hyperhdr",
-        state: str = "not_loaded",
+        state: str | FakeConfigEntryState = "not_loaded",
     ) -> None:
         self.entry_id = entry_id
         self.unique_id = unique_id
@@ -310,7 +319,7 @@ class FakeConfigEntry:
         # (services.py's last-entry-unload check) -- a test that cares sets
         # this directly and registers the entry into
         # hass.config_entries.entries; nothing else in this stub reads it.
-        self.state = state
+        self.state = FakeConfigEntryState(state)
         self.update_listeners: list[Callable[..., Any]] = []
         self.on_unload_callbacks: list[Callable[[], Any]] = []
         self.reauth_started = False
@@ -515,6 +524,17 @@ class FakeServices:
         return await registration.handler(call)
 
 
+class FakeBus:
+    """Stand-in for ``hass.bus``: records ``async_listen_once`` listeners."""
+
+    def __init__(self) -> None:
+        self.once_listeners: dict[str, list[Callable[..., Any]]] = {}
+
+    def async_listen_once(self, event_type: str, listener: Callable[..., Any]) -> Callable[[], None]:
+        self.once_listeners.setdefault(event_type, []).append(listener)
+        return lambda: self.once_listeners[event_type].remove(listener)
+
+
 class FakeHass:
     """Stand-in for ``homeassistant.core.HomeAssistant``.
 
@@ -537,6 +557,7 @@ class FakeHass:
         self.dispatcher_calls: dict[str, list[tuple[Any, ...]]] = {}
         self.dispatcher_listeners: dict[str, list[Callable[..., Any]]] = {}
         self._tasks: list[asyncio.Task[Any]] = []
+        self.bus = FakeBus()
 
     def async_create_task(self, coro: Any, name: str | None = None, eager_start: bool = False) -> asyncio.Task[Any]:
         task: asyncio.Task[Any] = asyncio.ensure_future(coro)
@@ -587,6 +608,8 @@ class FakeServerClient:
     auth failure without any real socket or real sleep.
     """
 
+    connected = True
+
     def __init__(self, session: Any, host: str, port: int, **kwargs: Any) -> None:
         self.session = session
         self.host = host
@@ -602,6 +625,9 @@ class FakeServerClient:
         self.connect_behavior = "success"  # "success" | "timeout" | "auth_failed"
         self.connect_info: dict[str, Any] = {"instance": []}
         self.sysinfo_result: Any = None
+        # If set, delivered through the instance-update push callback right
+        # after on_connected (simulates a push racing setup).
+        self.push_during_start: dict[str, Any] | None = None
 
     def set_push_callback(self, topic: str, cb: Callable[[dict[str, Any]], None] | None) -> None:
         if cb is None:
@@ -613,6 +639,8 @@ class FakeServerClient:
         self.start_calls += 1
         if self.connect_behavior == "success" and self.on_connected is not None:
             await self.on_connected(self.connect_info)
+            if self.push_during_start is not None:
+                self.push_callbacks["instance-update"](self.push_during_start)
         elif self.connect_behavior == "auth_failed" and self.on_auth_failed is not None:
             self.on_auth_failed()
         # "timeout": deliberately calls neither callback.
@@ -688,7 +716,9 @@ def _stub_homeassistant() -> None:
     )
     ha.core = ha_core
 
-    ha_ce = _make_module("homeassistant.config_entries", ConfigEntry=FakeConfigEntry)
+    ha_ce = _make_module(
+        "homeassistant.config_entries", ConfigEntry=FakeConfigEntry, ConfigEntryState=FakeConfigEntryState
+    )
     ha.config_entries = ha_ce
 
     class _Platform:
@@ -705,9 +735,28 @@ def _stub_homeassistant() -> None:
         Platform=_Platform,
         CONF_HOST="host",
         CONF_PORT="port",
+        EVENT_HOMEASSISTANT_STOP="homeassistant_stop",
         CONTENT_TYPE_MULTIPART="multipart/x-mixed-replace; boundary={}",
     )
     ha.const = ha_const
+
+    class HomeAssistantError(Exception):
+        """Mirrors the real class's translation kwargs; ``str()`` is the translation key."""
+
+        def __init__(
+            self,
+            *args: Any,
+            translation_domain: str | None = None,
+            translation_key: str | None = None,
+            translation_placeholders: dict[str, str] | None = None,
+        ) -> None:
+            super().__init__(*args)
+            self.translation_domain = translation_domain
+            self.translation_key = translation_key
+            self.translation_placeholders = translation_placeholders
+
+        def __str__(self) -> str:
+            return self.translation_key or super().__str__()
 
     class ConfigEntryNotReady(Exception):
         pass
@@ -715,20 +764,27 @@ def _stub_homeassistant() -> None:
     class ConfigEntryAuthFailed(Exception):
         pass
 
-    class ServiceValidationError(Exception):
+    class ServiceValidationError(HomeAssistantError):
         pass
 
     ha_exc = _make_module(
         "homeassistant.exceptions",
         ConfigEntryNotReady=ConfigEntryNotReady,
         ConfigEntryAuthFailed=ConfigEntryAuthFailed,
-        HomeAssistantError=Exception,
+        HomeAssistantError=HomeAssistantError,
         ServiceValidationError=ServiceValidationError,
     )
     ha.exceptions = ha_exc
 
     ha_helpers = _make_module("homeassistant.helpers")
     ha.helpers = ha_helpers
+
+    ha_cv = _make_module(
+        "homeassistant.helpers.config_validation",
+        config_entry_only_config_schema=lambda domain: lambda config: config,
+    )
+    ha_helpers.config_validation = ha_cv
+    sys.modules["homeassistant.helpers.config_validation"] = ha_cv
 
     from typing import Generic, TypeVar
 
@@ -783,6 +839,10 @@ def _stub_homeassistant() -> None:
             self.coordinator = coordinator
 
         @property
+        def unique_id(self) -> str | None:
+            return getattr(self, "_attr_unique_id", None)
+
+        @property
         def available(self) -> bool:
             return bool(self.coordinator.last_update_success)
 
@@ -818,7 +878,9 @@ def _stub_homeassistant() -> None:
     def _async_dispatcher_send(hass: Any, signal: str, *args: Any) -> None:
         hass.dispatcher_calls.setdefault(signal, []).append(args)
         for target in list(hass.dispatcher_listeners.get(signal, [])):
-            target(*args)
+            result = target(*args)
+            if asyncio.iscoroutine(result):
+                hass.async_create_task(result)  # awaited via hass.async_block_till_done()
 
     def _async_dispatcher_connect(hass: Any, signal: str, target: Callable[..., Any]) -> Callable[[], None]:
         hass.dispatcher_listeners.setdefault(signal, []).append(target)
@@ -1018,6 +1080,7 @@ def _stub_homeassistant() -> None:
     class SensorEntityDescription:
         key: str
         name: str | None = None
+        translation_key: str | None = None
         entity_category: Any = None
         device_class: Any = None
         state_class: Any = None
@@ -1036,6 +1099,7 @@ def _stub_homeassistant() -> None:
     class NumberEntityDescription:
         key: str
         name: str | None = None
+        translation_key: str | None = None
         entity_category: Any = None
         native_min_value: float | None = None
         native_max_value: float | None = None

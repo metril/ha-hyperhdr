@@ -33,3 +33,17 @@ def test_component_labels_have_switch_translations() -> None:
     switches = _load("strings.json")["entity"]["switch"]
     for component, label in COMPONENT_LABELS.items():
         assert switches[component.lower()]["name"] == label
+
+
+def test_flow_title_and_hdr_states() -> None:
+    strings = _load("strings.json")
+    assert strings["config"]["flow_title"] == "{name}"
+    assert set(strings["entity"]["select"]["hdr_tone_mapping"]["state"]) == {"off", "on"}
+
+
+def test_every_raised_exception_key_is_defined() -> None:
+    keys: set[str] = set()
+    for path in _DIR.glob("*.py"):
+        keys |= set(re.findall(r'(?:translated_error|_validation_error)\(\s*"(\w+)"', path.read_text()))
+    assert keys
+    assert keys <= set(_load("strings.json")["exceptions"])

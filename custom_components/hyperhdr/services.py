@@ -13,7 +13,8 @@ import logging
 from typing import TYPE_CHECKING
 
 import voluptuous as vol
-from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.config_entries import ConfigEntryState
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
@@ -21,7 +22,7 @@ from homeassistant.helpers.target import TargetSelection, async_extract_referenc
 
 from .const import DOMAIN
 from .entity import server_uid
-from .exceptions import HyperHdrError
+from .exceptions import HyperHdrError, translated_error
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant, ServiceCall
@@ -40,6 +41,8 @@ ATTR_EFFECT = "effect"
 ATTR_PRIORITY = "priority"
 ATTR_DURATION = "duration"
 
+_PRIORITY = vol.All(vol.Coerce(int), vol.Range(min=1, max=253))
+_DURATION = vol.All(vol.Coerce(float), vol.Range(min=0, max=3600))
 _BYTE = vol.All(vol.Coerce(int), vol.Range(min=0, max=255))
 
 # ``cv.ENTITY_SERVICE_FIELDS`` is HA's standard target-key set (entity_id,
@@ -48,8 +51,8 @@ _SCHEMA_SET_COLOR = vol.Schema(
     {
         **cv.ENTITY_SERVICE_FIELDS,
         vol.Required(ATTR_RGB_COLOR): vol.All(vol.ExactSequence((_BYTE, _BYTE, _BYTE)), vol.Coerce(tuple)),
-        vol.Optional(ATTR_PRIORITY): vol.Coerce(int),
-        vol.Optional(ATTR_DURATION): vol.All(vol.Coerce(float), vol.Range(min=0)),
+        vol.Optional(ATTR_PRIORITY): _PRIORITY,
+        vol.Optional(ATTR_DURATION): _DURATION,
     }
 )
 
@@ -57,8 +60,8 @@ _SCHEMA_SET_EFFECT = vol.Schema(
     {
         **cv.ENTITY_SERVICE_FIELDS,
         vol.Required(ATTR_EFFECT): str,
-        vol.Optional(ATTR_PRIORITY): vol.Coerce(int),
-        vol.Optional(ATTR_DURATION): vol.All(vol.Coerce(float), vol.Range(min=0)),
+        vol.Optional(ATTR_PRIORITY): _PRIORITY,
+        vol.Optional(ATTR_DURATION): _DURATION,
     }
 )
 
@@ -70,7 +73,9 @@ _SCHEMA_CLEAR = vol.Schema(
         # everything" (or to this integration's own default_priority,
         # which would just as silently NOT clear anything else) would be a
         # surprising default for a destructive action.
-        vol.Required(ATTR_PRIORITY): vol.All(vol.Coerce(int), vol.Range(min=-1)),
+        vol.Required(ATTR_PRIORITY): vol.All(
+            vol.Coerce(int), vol.Any(-1, vol.Range(min=1, max=253), msg="priority must be -1 or between 1 and 253")
+        ),
     }
 )
 
@@ -80,6 +85,15 @@ type _Target = tuple[HyperHdrConfigEntry, HyperHdrInstanceClient, int]
 # ---------------------------------------------------------------------------
 # Target resolution
 # ---------------------------------------------------------------------------
+
+
+def _validation_error(key: str, **placeholders: object) -> ServiceValidationError:
+    """A ``ServiceValidationError`` carrying a translatable message."""
+    return ServiceValidationError(
+        translation_domain=DOMAIN,
+        translation_key=key,
+        translation_placeholders={name: str(value) for name, value in placeholders.items()},
+    )
 
 
 def _resolve_device(hass: HomeAssistant, device_id: str, *, strict: bool = True) -> _Target | None:
@@ -98,7 +112,7 @@ def _resolve_device(hass: HomeAssistant, device_id: str, *, strict: bool = True)
     device = dr.async_get(hass).async_get(device_id)
     if device is None:
         if strict:
-            raise ServiceValidationError(f"Device '{device_id}' not found")
+            raise _validation_error("device_not_found", device_id=device_id)
         return None
 
     raw_id = next(
@@ -106,18 +120,16 @@ def _resolve_device(hass: HomeAssistant, device_id: str, *, strict: bool = True)
     )
     if raw_id is None:
         if strict:
-            raise ServiceValidationError(f"Device '{device_id}' is not a HyperHDR device")
+            raise _validation_error("not_hyperhdr_device", device_id=device_id)
         return None
 
     for entry in hass.config_entries.async_entries(DOMAIN):
-        if not hasattr(entry, "runtime_data"):
+        if entry.state is not ConfigEntryState.LOADED:
             continue
         uid = server_uid(entry)
         if raw_id == uid:
             if strict:
-                raise ServiceValidationError(
-                    "This service must target a HyperHDR instance device, not the server device"
-                )
+                raise _validation_error("server_device_target")
             return None
         prefix = f"{uid}_"
         if not raw_id.startswith(prefix):
@@ -131,11 +143,11 @@ def _resolve_device(hass: HomeAssistant, device_id: str, *, strict: bool = True)
             if not strict:
                 _LOGGER.debug("Skipping HyperHDR instance %s: not connected", instance_id)
                 return None
-            raise ServiceValidationError(f"HyperHDR instance {instance_id} is not connected")
+            raise _validation_error("instance_not_connected", instance_id=instance_id)
         return entry, coordinator.client, instance_id
 
     if strict:
-        raise ServiceValidationError(f"Device '{device_id}' is not a connected HyperHDR instance")
+        raise _validation_error("device_not_connected_instance", device_id=device_id)
     return None
 
 
@@ -165,7 +177,7 @@ async def resolve_targets(hass: HomeAssistant, call: ServiceCall) -> list[_Targe
         _add(_resolve_device(hass, device_id, strict=False))
 
     if not targets:
-        raise ServiceValidationError("No HyperHDR instance targeted")
+        raise _validation_error("no_instance_targeted")
     return list(targets.values())
 
 
@@ -190,7 +202,7 @@ async def _handle_set_color(call: ServiceCall) -> None:
         try:
             await client.async_set_color(rgb, priority, duration_ms)
         except HyperHdrError as err:
-            raise HomeAssistantError(f"failed to set HyperHDR color: {err}") from err
+            raise translated_error("set_color_failed", error=err) from err
 
     await asyncio.gather(*(_run(t) for t in await resolve_targets(call.hass, call)))
 
@@ -206,7 +218,7 @@ async def _handle_set_effect(call: ServiceCall) -> None:
         try:
             await client.async_set_effect(effect, priority, duration_ms)
         except HyperHdrError as err:
-            raise HomeAssistantError(f"failed to set HyperHDR effect {effect!r}: {err}") from err
+            raise translated_error("set_effect_failed", effect=effect, error=err) from err
 
     await asyncio.gather(*(_run(t) for t in await resolve_targets(call.hass, call)))
 
@@ -219,7 +231,7 @@ async def _handle_clear(call: ServiceCall) -> None:
         try:
             await target[1].async_clear(priority)
         except HyperHdrError as err:
-            raise HomeAssistantError(f"failed to clear HyperHDR priority {priority}: {err}") from err
+            raise translated_error("clear_failed", priority=priority, error=err) from err
 
     await asyncio.gather(*(_run(t) for t in await resolve_targets(call.hass, call)))
 

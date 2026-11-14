@@ -235,3 +235,38 @@ class TestAsyncValidateConnectionWithSession:
         )
 
         assert result.error == "cannot_connect"
+
+
+class TestReauthData:
+    EXISTING = {"host": "h", CONF_TOKEN: "old-token", CONF_ADMIN_PASSWORD: "old-pw"}
+
+    def test_blank_fields_keep_stored_credentials(self) -> None:
+        assert flow_support.reauth_data(self.EXISTING, {CONF_TOKEN: "", CONF_ADMIN_PASSWORD: ""}) == self.EXISTING
+
+    def test_new_values_replace_stored_ones(self) -> None:
+        data = flow_support.reauth_data(self.EXISTING, {CONF_TOKEN: "new", CONF_ADMIN_PASSWORD: "pw2"})
+        assert data[CONF_TOKEN] == "new"
+        assert data[CONF_ADMIN_PASSWORD] == "pw2"
+
+    def test_remove_flags_drop_the_keys_even_if_a_value_is_present(self) -> None:
+        data = flow_support.reauth_data(
+            self.EXISTING,
+            {
+                CONF_TOKEN: "old-token",
+                flow_support.REAUTH_REMOVE_TOKEN: True,
+                flow_support.REAUTH_REMOVE_ADMIN_PASSWORD: True,
+            },
+        )
+        assert data == {"host": "h"}
+
+    def test_schema_exposes_remove_flags(self) -> None:
+        keys = {str(k) for k in flow_support.reauth_schema(token_required=False).schema}
+        assert {flow_support.REAUTH_REMOVE_TOKEN, flow_support.REAUTH_REMOVE_ADMIN_PASSWORD} <= keys
+
+
+class TestUdnToUniqueId:
+    def test_strips_uuid_prefix(self) -> None:
+        assert flow_support.udn_to_unique_id("uuid:abc-123") == "abc-123"
+
+    def test_bare_id_unchanged(self) -> None:
+        assert flow_support.udn_to_unique_id("abc-123") == "abc-123"

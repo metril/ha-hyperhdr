@@ -173,6 +173,10 @@ class HyperHdrBaseClient:
     async def _post_connect(self) -> None:
         """Hook run after auth, before the subscribing serverinfo call."""
 
+    async def _post_handshake(self) -> None:
+        """Hook run once the handshake is complete, before ``on_connected``
+        (e.g. to restore stream subscriptions lost with the old socket)."""
+
     # --- reconnect supervisor -------------------------------------------
 
     async def _supervisor_loop(self) -> None:
@@ -223,11 +227,13 @@ class HyperHdrBaseClient:
         try:
             await self._auth_handshake()
             await self._post_connect()
-            response = await self._send_command("serverinfo", subscribe=list(self._subscriptions))
+            response = await self._send_raw("serverinfo", subscribe=list(self._subscriptions))
             info = response.get("info")
             self._handshake_complete = True
-            self._reached_connected = True
+            await self._post_handshake()
             await self._invoke(self.on_connected, info if isinstance(info, dict) else {})
+            # Only now -- a failing on_connected must not reset the backoff.
+            self._reached_connected = True
             await receive_task
         finally:
             self._handshake_complete = False
@@ -245,7 +251,7 @@ class HyperHdrBaseClient:
 
     async def _auth_handshake(self) -> None:
         self.admin_logged_in = False
-        response = await self._send_command("authorize", subcommand="tokenRequired")
+        response = await self._send_raw("authorize", subcommand="tokenRequired")
         info = response.get("info")
         # Set as a public attribute (not a local) so it survives even when
         # this method goes on to raise below -- the config flow's one-shot
@@ -256,14 +262,14 @@ class HyperHdrBaseClient:
         if self.token_required:
             if not self._token:
                 raise HyperHdrAuthError("server requires a token but none is configured")
-            login_response = await self._send_command(
+            login_response = await self._send_raw(
                 "authorize", subcommand="login", token=self._token, raise_on_error=False
             )
             if not login_response.get("success", False):
                 raise HyperHdrAuthError(f"token login failed: {login_response.get('error', '')}")
 
         if self._admin_password:
-            login_response = await self._send_command(
+            login_response = await self._send_raw(
                 "authorize", subcommand="login", password=self._admin_password, raise_on_error=False
             )
             if not login_response.get("success", False):
@@ -272,7 +278,13 @@ class HyperHdrBaseClient:
 
     # --- request/response correlation -------------------------------------
 
-    async def _send_command(
+    async def _send_command(self, command: str, **kwargs: Any) -> dict[str, Any]:
+        """Public-path command: requires a completed connect handshake."""
+        if not self.connected:
+            raise HyperHdrConnectionError("not connected")
+        return await self._send_raw(command, **kwargs)
+
+    async def _send_raw(
         self,
         command: str,
         *,
@@ -281,7 +293,8 @@ class HyperHdrBaseClient:
         raise_on_error: bool = True,
         **payload: Any,
     ) -> dict[str, Any]:
-        """Send a tan-correlated command and await its matching response.
+        """Handshake-safe send (needs only an open socket): send a tan-correlated
+        command and await its matching response.
 
         Raises ``HyperHdrConnectionError`` if not connected, on send
         failure, or on timeout. Raises ``HyperHdrApiError`` if the response
@@ -298,21 +311,27 @@ class HyperHdrBaseClient:
         message.update(payload)
 
         future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
-        self._pending[tan] = future
+        pending = self._pending
+        pending[tan] = future
 
         _LOGGER.debug("send: command=%s subcommand=%s tan=%s", command, subcommand, tan)
         try:
             await self._ws.send_json(message)
         except Exception as err:
-            self._pending.pop(tan, None)
+            if pending.get(tan) is future:
+                del pending[tan]
             raise HyperHdrConnectionError(f"failed to send {command} (tan={tan}): {err}") from err
 
         effective_timeout = timeout if timeout is not None else self._request_timeout
         try:
             response = await asyncio.wait_for(future, timeout=effective_timeout)
         except TimeoutError as err:
-            self._pending.pop(tan, None)
             raise HyperHdrConnectionError(f"timed out waiting for response to {command} (tan={tan})") from err
+        finally:
+            # Also covers cancelled callers. Identity-checked: a reconnect
+            # swaps ``_pending`` and restarts tans, so never pop a newer one.
+            if pending.get(tan) is future:
+                del pending[tan]
 
         if raise_on_error and not response.get("success", True):
             raise HyperHdrApiError(command=str(response.get("command", command)), error=str(response.get("error", "")))
@@ -336,7 +355,7 @@ class HyperHdrBaseClient:
     def _handle_text_frame(self, raw: str) -> None:
         try:
             data = json.loads(raw)
-        except (json.JSONDecodeError, TypeError, ValueError):
+        except json.JSONDecodeError, TypeError, ValueError:
             self.malformed_or_unmatched_count += 1
             _LOGGER.debug("dropping malformed (non-JSON) frame")
             return
@@ -624,25 +643,48 @@ class HyperHdrInstanceClient(HyperHdrBaseClient):
         # complexity for a case that never happens. See ``_dispatch_push``'s
         # override below.
         self._ledstream_callbacks: list[Callable[[dict[str, Any]], None]] = []
+        self._imagestream_callbacks: list[Callable[[dict[str, Any]], None]] = []
+        # Serialize start/stop so concurrent first-starters can't see a
+        # refcount that implies a stream which never actually started.
+        self._ledstream_lock = asyncio.Lock()
+        self._imagestream_lock = asyncio.Lock()
 
     def _dispatch_push(self, topic: str, data: dict[str, Any]) -> None:
-        """Fan ``LEDSTREAM_UPDATE_TOPIC`` frames out to every registered
-        consumer; every other topic still goes through the inherited
-        single-callback-per-topic table unchanged."""
-        if topic != LEDSTREAM_UPDATE_TOPIC:
+        """Fan stream topics out to every registered consumer; every other
+        topic still goes through the inherited single-callback table."""
+        if topic == LEDSTREAM_UPDATE_TOPIC:
+            callbacks = self._ledstream_callbacks
+        elif topic == IMAGESTREAM_UPDATE_TOPIC:
+            callbacks = self._imagestream_callbacks
+        else:
             super()._dispatch_push(topic, data)
             return
-        if not self._ledstream_callbacks:
+        if not callbacks:
             _LOGGER.debug("no push callback registered for topic %s", topic)
             return
-        for callback in list(self._ledstream_callbacks):
+        for callback in list(callbacks):
             try:
                 callback(data)
             except Exception:
-                # A broken consumer must not be allowed to kill the receive
-                # loop, nor prevent the frame from reaching the other
-                # registered consumers.
+                # A broken consumer must not kill the receive loop nor starve
+                # the other registered consumers.
                 _LOGGER.exception("push callback for topic %s raised", topic)
+
+    async def _post_handshake(self) -> None:
+        """Re-send stream-start after a reconnect: the server forgot our
+        subscriptions with the old socket, but consumers are still registered."""
+        restores = (
+            (self._ledstream_refcount > 0, "ledstream-start"),
+            (self._imagestream_refcount > 0 and self.admin_logged_in, "imagestream-start"),
+        )
+        for wanted, subcommand in restores:
+            if not wanted:
+                continue
+            try:
+                await self._send_command("ledcolors", subcommand=subcommand)
+            except HyperHdrError as err:
+                # A rejected re-send must not kill the connection (that would loop forever).
+                _LOGGER.warning("failed to restore %s after reconnect: %s", subcommand, err)
 
     async def _post_connect(self) -> None:
         """Park this connection on ``instance_id`` via ``instance/switchTo``.
@@ -653,7 +695,7 @@ class HyperHdrInstanceClient(HyperHdrBaseClient):
         attempt one.
         """
         try:
-            await self._send_command("instance", subcommand="switchTo", instance=self.instance_id)
+            await self._send_raw("instance", subcommand="switchTo", instance=self.instance_id)
         except HyperHdrApiError as err:
             if err.error == "No Authorization" and self._admin_password is None:
                 raise HyperHdrAuthError(f"switching to instance {self.instance_id} requires an admin login") from err
@@ -724,50 +766,56 @@ class HyperHdrInstanceClient(HyperHdrBaseClient):
         breaking every future ``start_ledstream`` on this connection (they'd
         see a non-zero refcount and skip resending the real start command).
         """
-        self._ledstream_refcount += 1
-        self._ledstream_callbacks.append(cb)
-        if self._ledstream_refcount == 1:
-            try:
-                await self._send_command("ledcolors", subcommand="ledstream-start")
-            except Exception:
-                self._ledstream_refcount -= 1
-                self._ledstream_callbacks.remove(cb)
-                raise
+        async with self._ledstream_lock:
+            self._ledstream_callbacks.append(cb)
+            if self._ledstream_refcount == 0:
+                try:
+                    await self._send_command("ledcolors", subcommand="ledstream-start")
+                except Exception:
+                    self._ledstream_callbacks.remove(cb)
+                    raise
+            self._ledstream_refcount += 1
 
     async def stop_ledstream(self, cb: Callable[[dict[str, Any]], None]) -> None:
         """Decrement the ledstream refcount and unregister ``cb``, stopping
         the stream (for every remaining consumer too) only once the last
         one has stopped."""
-        if self._ledstream_refcount == 0:
-            return
-        self._ledstream_refcount -= 1
-        with contextlib.suppress(ValueError):
-            self._ledstream_callbacks.remove(cb)
-        if self._ledstream_refcount == 0:
-            await self._send_command("ledcolors", subcommand="ledstream-stop")
+        async with self._ledstream_lock:
+            if self._ledstream_refcount == 0:
+                return
+            self._ledstream_refcount -= 1
+            with contextlib.suppress(ValueError):
+                self._ledstream_callbacks.remove(cb)
+            if self._ledstream_refcount == 0 and self.connected:
+                # Disconnected: the server already dropped the subscription.
+                await self._send_command("ledcolors", subcommand="ledstream-stop")
 
     async def start_imagestream(self, cb: Callable[[dict[str, Any]], None]) -> None:
-        """Register ``cb`` for image-preview stream frames, refcounted.
+        """Register ``cb`` for image-preview stream frames, refcounted
+        (fan-out to every consumer, like ledstream).
 
         Unlike ledstream, imagestream requires an admin login (verified live).
         """
         if not self.admin_logged_in:
             raise HyperHdrAuthError("imagestream requires an admin login")
-        self._imagestream_refcount += 1
-        self.set_push_callback(IMAGESTREAM_UPDATE_TOPIC, cb)
-        if self._imagestream_refcount == 1:
-            try:
-                await self._send_command("ledcolors", subcommand="imagestream-start")
-            except Exception:
-                self._imagestream_refcount -= 1
-                self.set_push_callback(IMAGESTREAM_UPDATE_TOPIC, None)
-                raise
+        async with self._imagestream_lock:
+            self._imagestream_callbacks.append(cb)
+            if self._imagestream_refcount == 0:
+                try:
+                    await self._send_command("ledcolors", subcommand="imagestream-start")
+                except Exception:
+                    self._imagestream_callbacks.remove(cb)
+                    raise
+            self._imagestream_refcount += 1
 
     async def stop_imagestream(self, cb: Callable[[dict[str, Any]], None]) -> None:
-        """Decrement the imagestream refcount, stopping the stream at zero."""
-        if self._imagestream_refcount == 0:
-            return
-        self._imagestream_refcount -= 1
-        if self._imagestream_refcount == 0:
-            self.set_push_callback(IMAGESTREAM_UPDATE_TOPIC, None)
-            await self._send_command("ledcolors", subcommand="imagestream-stop")
+        """Unregister ``cb``, stopping the stream once the last consumer is gone."""
+        async with self._imagestream_lock:
+            if self._imagestream_refcount == 0:
+                return
+            self._imagestream_refcount -= 1
+            with contextlib.suppress(ValueError):
+                self._imagestream_callbacks.remove(cb)
+            if self._imagestream_refcount == 0 and self.connected:
+                # Disconnected: the server already dropped the subscription.
+                await self._send_command("ledcolors", subcommand="imagestream-stop")

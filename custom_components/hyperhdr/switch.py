@@ -23,11 +23,9 @@ Two switch kinds, both built dynamically rather than as a fixed list:
 
 from __future__ import annotations
 
-import asyncio
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.switch import SwitchEntity
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import EntityCategory
 
@@ -36,16 +34,15 @@ from .const import (
     COMPONENT_LABELS,
     FIRST_INSTANCE_ID,
     SIGNAL_INSTANCE_ADDED,
-    SIGNAL_INSTANCE_READY,
 )
 from .entity import (
     HyperHdrInstanceEntity,
     HyperHdrServerEntity,
+    async_setup_connected_entities,
     instance_device_info,
     require_instance_client,
-    wait_for_connected_data,
 )
-from .exceptions import HyperHdrError
+from .exceptions import HyperHdrError, translated_error
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -53,6 +50,7 @@ if TYPE_CHECKING:
 
     from .client import HyperHdrServerClient
     from .coordinator import HyperHdrConfigEntry, HyperHdrInstanceCoordinator, HyperHdrServerCoordinator
+    from .models import HyperHdrInstanceData
 
 PARALLEL_UPDATES = 0
 
@@ -62,26 +60,15 @@ async def async_setup_entry(
 ) -> None:
     """Set up HyperHDR switch entities."""
     runtime = entry.runtime_data
+    await async_setup_connected_entities(hass, entry, async_add_entities, _component_entities)
 
-    component_lists = await asyncio.gather(
-        *(
-            _component_entities_for_instance(entry, coordinator, instance_id)
-            for instance_id, coordinator in runtime.instance_coordinators.items()
-        )
-    )
-    entities: list[SwitchEntity] = [switch for sublist in component_lists for switch in sublist]
     server_data = runtime.server_coordinator.data
     if server_data is not None:
-        entities.extend(
+        async_add_entities(
             HyperHdrRunningSwitch(runtime.server_coordinator, entry, instance_id)
             for instance_id in server_data.instances
             if instance_id != FIRST_INSTANCE_ID
         )
-    async_add_entities(entities)
-
-    async def _add_components_for_instance(instance_id: int) -> None:
-        coordinator = runtime.instance_coordinators[instance_id]
-        async_add_entities(await _component_entities_for_instance(entry, coordinator, instance_id))
 
     async def _add_running_for_instance(instance_id: int) -> None:
         if instance_id == FIRST_INSTANCE_ID:
@@ -89,26 +76,19 @@ async def async_setup_entry(
         async_add_entities([HyperHdrRunningSwitch(runtime.server_coordinator, entry, instance_id)])
 
     entry.async_on_unload(
-        async_dispatcher_connect(hass, f"{SIGNAL_INSTANCE_READY}_{entry.entry_id}", _add_components_for_instance)
-    )
-    entry.async_on_unload(
         async_dispatcher_connect(hass, f"{SIGNAL_INSTANCE_ADDED}_{entry.entry_id}", _add_running_for_instance)
     )
 
 
-async def _component_entities_for_instance(
-    entry: HyperHdrConfigEntry, coordinator: HyperHdrInstanceCoordinator, instance_id: int
+def _component_entities(
+    entry: HyperHdrConfigEntry, data: HyperHdrInstanceData, coordinator: HyperHdrInstanceCoordinator, instance_id: int
 ) -> list[HyperHdrComponentSwitch]:
-    """Build one switch per reported component.
+    """One switch per component in a *connected* snapshot.
 
-    Bounded-waits for a connected snapshot first (``wait_for_connected_data``)
-    -- ``coordinator.data.components`` is an empty placeholder until the
-    instance's client finishes connecting, and unlike an entity's *state*
-    (read fresh on every access), the entity *set* built here is a one-time
-    snapshot: building it too early would silently create zero switches,
-    permanently, for this add pass. Confirmed live (Phase 5+6).
+    Evaluated on every connected update by ``async_setup_connected_entities``
+    (which dedupes by unique_id), so components reported only by a late
+    first snapshot -- or appearing later -- still get their switch.
     """
-    data = await wait_for_connected_data(coordinator)
     return [HyperHdrComponentSwitch(coordinator, entry, instance_id, name) for name in data.components]
 
 
@@ -152,7 +132,7 @@ class HyperHdrComponentSwitch(HyperHdrInstanceEntity, SwitchEntity):
         try:
             await client.async_set_component(self._component_name, state)
         except HyperHdrError as err:
-            raise HomeAssistantError(f"failed to set HyperHDR component {self._component_name}: {err}") from err
+            raise translated_error("component_failed", component=self._component_name, error=err) from err
 
 
 class HyperHdrRunningSwitch(HyperHdrServerEntity, SwitchEntity):
@@ -183,22 +163,16 @@ class HyperHdrRunningSwitch(HyperHdrServerEntity, SwitchEntity):
         summary = self.coordinator.data.instances.get(self._instance_id)
         return summary.running if summary is not None else False
 
-    @property
-    def available(self) -> bool:
-        """Unavailable while the server connection itself is down."""
-        data_connected = self.coordinator.data.connected if self.coordinator.data is not None else False
-        return bool(super().available) and data_connected
-
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Start the instance."""
         try:
             await self._server_client.start_instance(self._instance_id)
         except HyperHdrError as err:
-            raise HomeAssistantError(f"failed to start HyperHDR instance {self._instance_id}: {err}") from err
+            raise translated_error("start_instance_failed", instance_id=self._instance_id, error=err) from err
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Stop the instance."""
         try:
             await self._server_client.stop_instance(self._instance_id)
         except HyperHdrError as err:
-            raise HomeAssistantError(f"failed to stop HyperHDR instance {self._instance_id}: {err}") from err
+            raise translated_error("stop_instance_failed", instance_id=self._instance_id, error=err) from err
