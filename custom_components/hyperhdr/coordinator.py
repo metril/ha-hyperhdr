@@ -249,6 +249,9 @@ class HyperHdrRuntimeData:
     instance_coordinators: dict[int, HyperHdrInstanceCoordinator]
     default_priority: int
     hidden_effects: set[str]
+    # Device-registry id of the server device (instance devices link to it via
+    # ``via_device_id``); set in async_setup_entry before platforms forward.
+    server_device_id: str | None = None
     # Serializes the instance-roster diff (reconnect, roster push, initial
     # startup burst) so overlapping runs can never double-create an instance.
     diff_lock: asyncio.Lock = field(default_factory=asyncio.Lock)

@@ -73,6 +73,9 @@ class TestAsyncSetupEntryHappyPath:
         assert runtime.server_coordinator.data.connected is True
         assert runtime.server_coordinator.data.sysinfo.hostname == "hyperhdr-host"
         assert runtime.instance_coordinators == {}
+        server_device = hass.device_registry.async_get_device({("hyperhdr", "srv-uid")})
+        assert server_device is not None
+        assert runtime.server_device_id == server_device.id
         assert hass.config_entries.forward_calls == [(entry, hyperhdr.PLATFORMS)]
         assert not entry.update_listeners  # options reload comes from OptionsFlowWithReload
         assert not hass.services.has_service("hyperhdr", "clear")  # registered by async_setup, not per entry

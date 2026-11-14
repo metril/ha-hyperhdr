@@ -94,6 +94,7 @@ class TestHyperHdrInstanceEntity:
             instance_coordinators={},
             default_priority=128,
             hidden_effects=set(),
+            server_device_id="dev-srv",
         )
         return hass, entry, server_coordinator
 
@@ -103,13 +104,14 @@ class TestHyperHdrInstanceEntity:
         entity = HyperHdrInstanceEntity(coordinator, entry, 1, "power")
         assert entity._attr_unique_id == "srv-uid_1_power"
 
-    def test_device_identifiers_via_device_and_name_from_roster(self) -> None:
+    def test_device_identifiers_via_device_id_and_name_from_roster(self) -> None:
         hass, entry, _server_coordinator = self._entry_with_runtime()
         coordinator = HyperHdrInstanceCoordinator(hass, entry, 1)
         entity = HyperHdrInstanceEntity(coordinator, entry, 1, "power")
         info = entity._attr_device_info
         assert info["identifiers"] == {(DOMAIN, "srv-uid_1")}
-        assert info["via_device"] == (DOMAIN, "srv-uid")
+        assert info["via_device_id"] == "dev-srv"
+        assert "via_device" not in info
         assert info["manufacturer"] == MANUFACTURER
         assert info["name"] == "Living Room"
 
