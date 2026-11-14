@@ -38,11 +38,11 @@ from typing import TYPE_CHECKING, Any
 from aiohttp import web
 from homeassistant.components.camera import Camera
 from homeassistant.const import CONTENT_TYPE_MULTIPART
-from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from PIL import Image, ImageDraw
 
-from .const import DEFAULT_REQUEST_TIMEOUT, OPT_REQUEST_TIMEOUT, SIGNAL_INSTANCE_READY
-from .entity import HyperHdrInstanceEntity, wait_for_connected_data
+from .const import DEFAULT_REQUEST_TIMEOUT, OPT_REQUEST_TIMEOUT
+from .entity import HyperHdrInstanceEntity, async_setup_connected_entities
+from .exceptions import HyperHdrError
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -52,7 +52,7 @@ if TYPE_CHECKING:
 
     from .client import HyperHdrInstanceClient
     from .coordinator import HyperHdrConfigEntry, HyperHdrInstanceCoordinator
-    from .models import HyperHdrLedGeometry
+    from .models import HyperHdrInstanceData, HyperHdrLedGeometry
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -69,38 +69,19 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: HyperHdrConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     """Set up HyperHDR camera entities."""
-    runtime = entry.runtime_data
-    camera_lists = await asyncio.gather(
-        *(
-            _entities_for_instance(entry, coordinator, instance_id)
-            for instance_id, coordinator in runtime.instance_coordinators.items()
-        )
-    )
-    entities: list[Camera] = [camera for sublist in camera_lists for camera in sublist]
-    async_add_entities(entities)
-
-    async def _add_for_instance(instance_id: int) -> None:
-        coordinator = runtime.instance_coordinators[instance_id]
-        async_add_entities(await _entities_for_instance(entry, coordinator, instance_id))
-
-    entry.async_on_unload(
-        async_dispatcher_connect(hass, f"{SIGNAL_INSTANCE_READY}_{entry.entry_id}", _add_for_instance)
-    )
+    await async_setup_connected_entities(hass, entry, async_add_entities, _entities_for_data)
 
 
-async def _entities_for_instance(
-    entry: HyperHdrConfigEntry, coordinator: HyperHdrInstanceCoordinator, instance_id: int
+def _entities_for_data(
+    entry: HyperHdrConfigEntry, data: HyperHdrInstanceData, coordinator: HyperHdrInstanceCoordinator, instance_id: int
 ) -> list[Camera]:
-    """Build the camera entity for one instance -- or none.
+    """Build the camera entity for one instance from a *connected* snapshot -- or none.
 
-    Bounded-waits for a connected snapshot first (``wait_for_connected_data``),
-    same reasoning as switch.py/number.py: the entity *set* built here is a
-    one-time snapshot, and ``coordinator.data.led_geometry`` is empty on the
-    disconnected placeholder. Guard: an instance whose ``serverinfo`` never
-    reports LED geometry at all (no LED layout configured) gets no camera,
-    not a permanently-unavailable one.
+    Guard: an instance whose ``serverinfo`` never reports LED geometry at
+    all (no LED layout configured) gets no camera, not a
+    permanently-unavailable one. Re-evaluated on later connected updates
+    (deduped by unique_id), so geometry arriving late still adds it.
     """
-    data = await wait_for_connected_data(coordinator)
     if not data.led_geometry:
         return []
     return [HyperHdrLedPreviewCamera(coordinator, entry, instance_id)]
@@ -113,7 +94,7 @@ def _clamp_byte(value: object) -> int:
     """Coerce ``value`` to a valid 0-255 color channel, defensively (never raises)."""
     try:
         coerced: int = int(value)  # type: ignore[call-overload]
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return 0
     return max(0, min(255, coerced))
 
@@ -224,7 +205,7 @@ class _HyperHdrCameraBase(HyperHdrInstanceEntity, Camera):
         other camera's "no image available right now" contract.
         """
         client = self.coordinator.client
-        if client is None:
+        if client is None or not client.connected:
             return None
         frame = await self._async_capture_one_frame(client)
         if frame is None:
@@ -242,7 +223,10 @@ class _HyperHdrCameraBase(HyperHdrInstanceEntity, Camera):
             with contextlib.suppress(asyncio.QueueFull):
                 queue.put_nowait(leds)
 
-        await client.start_ledstream(_on_frame)
+        try:
+            await client.start_ledstream(_on_frame)
+        except HyperHdrError:
+            return None
         try:
             return await asyncio.wait_for(queue.get(), timeout=self._request_timeout)
         except TimeoutError:
@@ -263,7 +247,7 @@ class _HyperHdrCameraBase(HyperHdrInstanceEntity, Camera):
         cancellation.
         """
         client = self.coordinator.client
-        if client is None:
+        if client is None or not client.connected:
             return None
 
         queue: asyncio.Queue[list[int]] = asyncio.Queue(maxsize=1)
@@ -278,7 +262,10 @@ class _HyperHdrCameraBase(HyperHdrInstanceEntity, Camera):
             with contextlib.suppress(asyncio.QueueFull):
                 queue.put_nowait(leds)
 
-        await client.start_ledstream(_on_frame)
+        try:
+            await client.start_ledstream(_on_frame)
+        except HyperHdrError:
+            return None
         try:
             response = web.StreamResponse()
             response.content_type = CONTENT_TYPE_MULTIPART.format("--frameboundary")

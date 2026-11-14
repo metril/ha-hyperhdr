@@ -1,5 +1,6 @@
 {
   "config": {
+    "flow_title": "{name}",
     "step": {
       "user": {
         "title": "Connect to HyperHDR",
@@ -58,11 +59,15 @@
         "description": "Home Assistant lost access to this HyperHDR server. Provide an updated API token and/or admin password.",
         "data": {
           "token": "API token",
-          "admin_password": "Admin password"
+          "admin_password": "Admin password",
+          "remove_token": "Remove stored API token",
+          "remove_admin_password": "Remove stored admin password"
         },
         "data_description": {
-          "token": "Leave blank if the server no longer requires a token.",
-          "admin_password": "Leave blank to leave the previously configured admin password unchanged."
+          "token": "Leave unchanged to keep the stored token. Tick \"Remove stored API token\" below to drop it.",
+          "admin_password": "Leave blank to keep the previously configured admin password.",
+          "remove_token": "Delete the stored token (only if the server no longer requires one).",
+          "remove_admin_password": "Delete the stored admin password (disables admin-gated features)."
         }
       },
       "reconfigure": {
@@ -118,22 +123,98 @@
     }
   },
   "entity": {
-    "button": { "clear_priority": { "name": "Clear priority" } },
-    "camera": { "led_preview": { "name": "LED preview" } },
+    "button": {
+      "clear_priority": {
+        "name": "Clear priority"
+      }
+    },
+    "camera": {
+      "led_preview": {
+        "name": "LED preview"
+      }
+    },
     "select": {
-      "hdr_tone_mapping": { "name": "HDR tone mapping" },
-      "priority_source": { "name": "Priority source" }
+      "hdr_tone_mapping": {
+        "name": "HDR tone mapping",
+        "state": {
+          "off": "Off",
+          "on": "On"
+        }
+      },
+      "priority_source": {
+        "name": "Priority source"
+      }
     },
     "switch": {
-      "running": { "name": "Running" },
-      "all": { "name": "All instances (global)" },
-      "hdr": { "name": "HDR tone mapping" },
-      "smoothing": { "name": "Smoothing" },
-      "blackborder": { "name": "Blackborder detection" },
-      "forwarder": { "name": "Forwarder" },
-      "videograbber": { "name": "USB capture" },
-      "systemgrabber": { "name": "Screen capture" },
-      "leddevice": { "name": "LED device" }
+      "running": {
+        "name": "Running"
+      },
+      "all": {
+        "name": "All instances (global)"
+      },
+      "hdr": {
+        "name": "HDR tone mapping"
+      },
+      "smoothing": {
+        "name": "Smoothing"
+      },
+      "blackborder": {
+        "name": "Blackborder detection"
+      },
+      "forwarder": {
+        "name": "Forwarder"
+      },
+      "videograbber": {
+        "name": "USB capture"
+      },
+      "systemgrabber": {
+        "name": "Screen capture"
+      },
+      "leddevice": {
+        "name": "LED device"
+      }
+    },
+    "light": {
+      "light": {
+        "name": "Light"
+      }
+    },
+    "number": {
+      "luminance_gain": {
+        "name": "Luminance gain"
+      },
+      "saturation_gain": {
+        "name": "Saturation gain"
+      },
+      "gamma": {
+        "name": "Gamma"
+      },
+      "backlight_threshold": {
+        "name": "Backlight threshold"
+      },
+      "temperature_red": {
+        "name": "Temperature red"
+      },
+      "temperature_green": {
+        "name": "Temperature green"
+      },
+      "temperature_blue": {
+        "name": "Temperature blue"
+      }
+    },
+    "sensor": {
+      "visible_priority": {
+        "name": "Visible priority"
+      },
+      "led_count": {
+        "name": "LED count"
+      },
+      "video_mode": {
+        "name": "Video mode"
+      },
+      "version": {
+        "name": "Version"
+      }
     }
   },
   "services": {
@@ -141,7 +222,10 @@
       "name": "Set color",
       "description": "Set a solid color at a priority on a HyperHDR instance.",
       "fields": {
-        "rgb_color": { "name": "Color", "description": "The RGB color to set." },
+        "rgb_color": {
+          "name": "Color",
+          "description": "The RGB color to set."
+        },
         "priority": {
           "name": "Priority",
           "description": "HyperHDR priority to set the color at (1-253). Defaults to this integration's configured default priority when omitted."
@@ -174,8 +258,67 @@
       "name": "Clear priority",
       "description": "Clear a priority (or every priority) on a HyperHDR instance.",
       "fields": {
-        "priority": { "name": "Priority", "description": "The priority to clear. Use -1 to clear every priority." }
+        "priority": {
+          "name": "Priority",
+          "description": "The priority to clear. Use -1 to clear every priority."
+        }
       }
+    }
+  },
+  "exceptions": {
+    "device_not_found": {
+      "message": "Device '{device_id}' not found"
+    },
+    "not_hyperhdr_device": {
+      "message": "Device '{device_id}' is not a HyperHDR device"
+    },
+    "server_device_target": {
+      "message": "This service must target a HyperHDR instance device, not the server device"
+    },
+    "instance_not_connected": {
+      "message": "HyperHDR instance {instance_id} is not connected"
+    },
+    "device_not_connected_instance": {
+      "message": "Device '{device_id}' is not a connected HyperHDR instance"
+    },
+    "instance_disconnected": {
+      "message": "HyperHDR instance is not connected"
+    },
+    "set_color_failed": {
+      "message": "Failed to set HyperHDR color: {error}"
+    },
+    "set_effect_failed": {
+      "message": "Failed to set HyperHDR effect {effect}: {error}"
+    },
+    "clear_failed": {
+      "message": "Failed to clear HyperHDR priority {priority}: {error}"
+    },
+    "light_turn_on_failed": {
+      "message": "Failed to turn on HyperHDR light: {error}"
+    },
+    "light_turn_off_failed": {
+      "message": "Failed to turn off HyperHDR light: {error}"
+    },
+    "component_failed": {
+      "message": "Failed to set HyperHDR component {component}: {error}"
+    },
+    "start_instance_failed": {
+      "message": "Failed to start HyperHDR instance {instance_id}: {error}"
+    },
+    "stop_instance_failed": {
+      "message": "Failed to stop HyperHDR instance {instance_id}: {error}"
+    },
+    "hdr_failed": {
+      "message": "Failed to set HyperHDR HDR tone mapping: {error}"
+    },
+    "priority_source_failed": {
+      "message": "Failed to select HyperHDR priority source {source}: {error}"
+    },
+    "adjustment_failed": {
+      "message": "Failed to set HyperHDR {field}: {error}"
+    },
+    "no_instance_targeted": {
+      "message": "No HyperHDR instance targeted"
     }
   }
 }

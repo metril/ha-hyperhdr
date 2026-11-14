@@ -3,13 +3,14 @@ and the roster-driven running switch."""
 
 from __future__ import annotations
 
-import asyncio
+from typing import Any
 
 import pytest
 from conftest import FakeConfigEntry, FakeDomainClient, FakeHass
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 
-from custom_components.hyperhdr.const import SIGNAL_INSTANCE_ADDED
+from custom_components.hyperhdr.const import SIGNAL_INSTANCE_ADDED, SIGNAL_INSTANCE_READY
 from custom_components.hyperhdr.coordinator import (
     HyperHdrInstanceCoordinator,
     HyperHdrRuntimeData,
@@ -25,8 +26,9 @@ from custom_components.hyperhdr.models import (
     HyperHdrSysInfo,
 )
 from custom_components.hyperhdr.switch import (
+    HyperHdrComponentSwitch,
     HyperHdrRunningSwitch,
-    _component_entities_for_instance,
+    _component_entities,
     async_setup_entry,
 )
 
@@ -100,7 +102,7 @@ class TestComponentSwitchDynamicBuild:
                 }
             )
         )
-        entities = await _component_entities_for_instance(entry, coordinator, 1)
+        entities = _component_entities(entry, coordinator.data, coordinator, 1)
         keys = {e._attr_unique_id for e in entities}
         assert keys == {
             "srv-uid_1_component_all",
@@ -108,7 +110,7 @@ class TestComponentSwitchDynamicBuild:
             "srv-uid_1_component_smoothing",
         }
 
-    async def test_names_from_component_labels_with_title_case_fallback(self) -> None:
+    async def test_known_components_get_translation_keys_unknown_get_title_case_name(self) -> None:
         entry, _server, coordinator, _client = _make_setup()
         coordinator.async_set_updated_data(
             _instance_data(
@@ -118,12 +120,13 @@ class TestComponentSwitchDynamicBuild:
                 }
             )
         )
-        entities = {e._component_name: e for e in await _component_entities_for_instance(entry, coordinator, 1)}
+        entities = {e._component_name: e for e in _component_entities(entry, coordinator.data, coordinator, 1)}
         # "All instances (global)" is HyperHDR's own web-UI label for ALL --
         # setting it pauses/resumes every instance on the server, so the name
         # must state that scope.
         assert entities["ALL"]._attr_translation_key == "all"
         assert entities["CUSTOMTHING"]._attr_name == "Customthing"
+        assert not hasattr(entities["CUSTOMTHING"], "_attr_translation_key")
 
     async def test_icons_from_component_icons_with_no_icon_fallback(self) -> None:
         entry, _server, coordinator, _client = _make_setup()
@@ -136,7 +139,7 @@ class TestComponentSwitchDynamicBuild:
                 }
             )
         )
-        entities = {e._component_name: e for e in await _component_entities_for_instance(entry, coordinator, 1)}
+        entities = {e._component_name: e for e in _component_entities(entry, coordinator.data, coordinator, 1)}
         assert entities["ALL"]._attr_icon == "mdi:power"
         assert entities["LEDDEVICE"]._attr_icon == "mdi:led-strip-variant"
         assert entities["CUSTOMTHING"]._attr_icon is None
@@ -144,14 +147,14 @@ class TestComponentSwitchDynamicBuild:
     async def test_empty_components_creates_nothing(self) -> None:
         entry, _server, coordinator, _client = _make_setup()
         coordinator.async_set_updated_data(_instance_data({}))
-        assert await _component_entities_for_instance(entry, coordinator, 1) == []
+        assert _component_entities(entry, coordinator.data, coordinator, 1) == []
 
     async def test_is_on_reflects_component_enabled(self) -> None:
         entry, _server, coordinator, _client = _make_setup()
         coordinator.async_set_updated_data(
             _instance_data({"SMOOTHING": HyperHdrComponent(name="SMOOTHING", enabled=True)})
         )
-        entities = await _component_entities_for_instance(entry, coordinator, 1)
+        entities = _component_entities(entry, coordinator.data, coordinator, 1)
         assert entities[0].is_on is True
 
     async def test_turn_on_off_call_set_component(self) -> None:
@@ -159,7 +162,7 @@ class TestComponentSwitchDynamicBuild:
         coordinator.async_set_updated_data(
             _instance_data({"SMOOTHING": HyperHdrComponent(name="SMOOTHING", enabled=False)})
         )
-        entities = await _component_entities_for_instance(entry, coordinator, 1)
+        entities = _component_entities(entry, coordinator.data, coordinator, 1)
         await entities[0].async_turn_on()
         await entities[0].async_turn_off()
         assert client.calls == [
@@ -173,35 +176,53 @@ class TestComponentSwitchDynamicBuild:
         coordinator.async_set_updated_data(
             _instance_data({"SMOOTHING": HyperHdrComponent(name="SMOOTHING", enabled=False)})
         )
-        entities = await _component_entities_for_instance(entry, coordinator, 1)
+        entities = _component_entities(entry, coordinator.data, coordinator, 1)
         with pytest.raises(HomeAssistantError):
             await entities[0].async_turn_on()
 
-    async def test_waits_for_connected_data_instead_of_building_off_the_disconnected_placeholder(self) -> None:
-        """Regression (found live, Phase 5+6): a freshly constructed
-        coordinator's ``.data`` is the disconnected placeholder (empty
-        ``components``) until its client's connect handshake completes.
-        Building the switch set against that placeholder -- which is
-        exactly what happens if the builder reads ``coordinator.data``
-        synchronously rather than awaiting ``wait_for_connected_data`` --
-        would silently create zero switches, permanently, for this add
-        pass. Confirmed live via HA's "restored": true ghost entities."""
+    async def test_listener_connected_before_any_connected_data_and_late_snapshot_adds_switches(self) -> None:
+        """The READY listener is connected up front (an instance created
+        while setup runs is not missed) and a connected snapshot arriving
+        after setup -- e.g. past the old bounded wait -- still adds its
+        switches; later updates never duplicate them."""
+        hass = FakeHass()
         entry, _server, coordinator, _client = _make_setup()
         assert coordinator.data.connected is False
-        assert coordinator.data.components == {}
+        added = await _setup_platform(entry, hass, async_setup_entry)
+        assert [e for e in added if isinstance(e, HyperHdrComponentSwitch)] == []
 
-        async def _connect_shortly_after() -> None:
-            await asyncio.sleep(0)
-            coordinator.async_set_updated_data(
-                _instance_data({"SMOOTHING": HyperHdrComponent(name="SMOOTHING", enabled=True)})
+        coordinator.async_set_updated_data(
+            _instance_data({"SMOOTHING": HyperHdrComponent(name="SMOOTHING", enabled=True)})
+        )
+        coordinator.async_set_updated_data(
+            _instance_data(
+                {
+                    "SMOOTHING": HyperHdrComponent(name="SMOOTHING", enabled=True),
+                    "HDR": HyperHdrComponent(name="HDR", enabled=False),
+                }
             )
+        )
+        coordinator.async_set_updated_data(
+            _instance_data({"SMOOTHING": HyperHdrComponent(name="SMOOTHING", enabled=True)})
+        )
+        keys = [e._attr_unique_id for e in added if isinstance(e, HyperHdrComponentSwitch)]
+        assert keys == ["srv-uid_1_component_smoothing", "srv-uid_1_component_hdr"]
 
-        populate_task = asyncio.ensure_future(_connect_shortly_after())
-        entities = await _component_entities_for_instance(entry, coordinator, 1)
-        await populate_task
+    async def test_instance_ready_signal_after_setup_is_tracked_once(self) -> None:
+        hass = FakeHass()
+        entry, _server, coordinator, _client = _make_setup()
+        del entry.runtime_data.instance_coordinators[1]
+        added = await _setup_platform(entry, hass, async_setup_entry)
 
-        assert len(entities) == 1
-        assert entities[0]._component_name == "SMOOTHING"
+        coordinator.async_set_updated_data(_instance_data({"ALL": HyperHdrComponent(name="ALL", enabled=True)}))
+        entry.runtime_data.instance_coordinators[1] = coordinator
+        async_dispatcher_send(hass, f"{SIGNAL_INSTANCE_READY}_{entry.entry_id}", 1)
+        async_dispatcher_send(hass, f"{SIGNAL_INSTANCE_READY}_{entry.entry_id}", 1)
+        await hass.async_block_till_done()
+
+        assert [e._attr_unique_id for e in added if isinstance(e, HyperHdrComponentSwitch)] == [
+            "srv-uid_1_component_all"
+        ]
 
 
 class TestRunningSwitch:
@@ -327,3 +348,10 @@ class TestRunningSwitchNeverBuiltForFirstInstance:
         assert added == []
         await listener(2)
         assert [switch._instance_id for switch in added] == [2]
+
+
+async def _setup_platform(entry: FakeConfigEntry, hass: FakeHass, setup: Any) -> list[Any]:
+    """Run a platform's ``async_setup_entry`` collecting every entity it adds."""
+    added: list[Any] = []
+    await setup(hass, entry, lambda new: added.extend(new))
+    return added

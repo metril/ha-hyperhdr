@@ -11,13 +11,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from homeassistant.components.select import SelectEntity
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import EntityCategory
 
 from .const import HDR_MODE_OFF, HDR_MODE_ON, SIGNAL_INSTANCE_READY, SOURCE_AUTO
 from .entity import HyperHdrInstanceEntity, require_instance_client
-from .exceptions import HyperHdrError
+from .exceptions import HyperHdrError, translated_error
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -41,10 +40,15 @@ async def async_setup_entry(
     for instance_id, coordinator in runtime.instance_coordinators.items():
         entities.extend(_entities_for_instance(entry, coordinator, instance_id))
     async_add_entities(entities)
+    added: set[str | None] = {entity.unique_id for entity in entities}
 
     async def _add_for_instance(instance_id: int) -> None:
-        coordinator = runtime.instance_coordinators[instance_id]
-        async_add_entities(_entities_for_instance(entry, coordinator, instance_id))
+        coordinator = runtime.instance_coordinators.get(instance_id)
+        if coordinator is None:
+            return
+        fresh = [e for e in _entities_for_instance(entry, coordinator, instance_id) if e.unique_id not in added]
+        added.update(entity.unique_id for entity in fresh)
+        async_add_entities(fresh)
 
     entry.async_on_unload(
         async_dispatcher_connect(hass, f"{SIGNAL_INSTANCE_READY}_{entry.entry_id}", _add_for_instance)
@@ -95,7 +99,7 @@ class HyperHdrHdrToneMappingSelect(HyperHdrInstanceEntity, SelectEntity):
         try:
             await client.async_set_hdr_mode(mode)
         except HyperHdrError as err:
-            raise HomeAssistantError(f"failed to set HyperHDR HDR tone mapping: {err}") from err
+            raise translated_error("hdr_failed", error=err) from err
         self.coordinator.apply_optimistic_hdr_mode(mode)
 
 
@@ -143,4 +147,4 @@ class HyperHdrPrioritySourceSelect(HyperHdrInstanceEntity, SelectEntity):
                 priority = int(option.split(":", 1)[0])
                 await client.async_select_source(priority)
         except (HyperHdrError, ValueError) as err:
-            raise HomeAssistantError(f"failed to select HyperHDR priority source {option!r}: {err}") from err
+            raise translated_error("priority_source_failed", source=option, error=err) from err

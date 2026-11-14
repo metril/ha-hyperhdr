@@ -7,27 +7,26 @@ device per HyperHDR instance, ``via_device``-linked to the server device).
 
 from __future__ import annotations
 
-import asyncio
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.const import CONF_HOST, CONF_PORT
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import CONF_USE_SSL, DEFAULT_PORT, DOMAIN, MANUFACTURER
+from .const import CONF_USE_SSL, DEFAULT_PORT, DOMAIN, MANUFACTURER, SIGNAL_INSTANCE_READY
 from .coordinator import HyperHdrInstanceCoordinator, HyperHdrServerCoordinator
+from .exceptions import translated_error
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from homeassistant.core import HomeAssistant
+    from homeassistant.helpers.entity_platform import AddEntitiesCallback
+
     from .client import HyperHdrInstanceClient
     from .coordinator import HyperHdrConfigEntry
     from .models import HyperHdrInstanceData
-
-# Bounded wait for wait_for_connected_data -- generous for a real (even
-# slow/remote) HyperHDR server while never hanging platform setup
-# indefinitely against one that's genuinely unreachable (matches the same
-# order of magnitude as __init__.py's own first-connect wait).
-_CONNECTED_DATA_WAIT_TIMEOUT = 10.0
 
 
 def server_uid(entry: HyperHdrConfigEntry) -> str:
@@ -99,62 +98,64 @@ def require_instance_client(coordinator: HyperHdrInstanceCoordinator) -> HyperHd
     """The instance coordinator's currently attached client, for entity
     service calls (Phase 5+6).
 
-    Raises ``HomeAssistantError`` (never a bare ``AttributeError``) when the
+    Raises a translated ``HomeAssistantError`` (never a bare ``AttributeError``) when the
     instance is currently stopped/disconnected -- ``coordinator.client`` is
     ``None`` whenever ``detach_client`` has run and no ``attach_client`` has
     happened since (see coordinator.py).
     """
     if coordinator.client is None:
-        raise HomeAssistantError("HyperHDR instance is not connected")
+        raise translated_error("instance_disconnected")
     return coordinator.client
 
 
-async def wait_for_connected_data(
-    coordinator: HyperHdrInstanceCoordinator, timeout: float = _CONNECTED_DATA_WAIT_TIMEOUT
-) -> HyperHdrInstanceData:
-    """The coordinator's first genuinely connected snapshot, bounded-waited.
+async def async_setup_connected_entities(
+    hass: HomeAssistant,
+    entry: HyperHdrConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+    build: Callable[[HyperHdrConfigEntry, HyperHdrInstanceData, HyperHdrInstanceCoordinator, int], list[Any]],
+) -> None:
+    """Add entities whose *set* depends on live instance data, as it appears.
 
-    For entity platforms whose *set* of entities (not just their state) is
-    built from live data content -- switch.py's per-component switches,
-    number.py's presence-gated adjustment fields -- reading
-    ``coordinator.data`` at build time is NOT safe to do immediately:
-    ``SIGNAL_INSTANCE_READY`` fires (and the initial per-platform
-    ``async_setup_entry`` loop can run) before the just-attached client has
-    actually finished its connect handshake, per coordinator.py's own
-    ``_initial_instance_data`` docstring. Building against that disconnected
-    placeholder (empty ``components``/``adjustment.raw``) would silently
-    create ZERO of these entities, permanently, for that add pass -- no
-    later mechanism re-adds them once the real data arrives, since
-    CoordinatorEntity only pushes state updates to already-created entities.
+    ``build(entry, data, coordinator, instance_id)`` is evaluated against every
+    *connected* snapshot of each instance's coordinator (never the
+    disconnected placeholder, which has empty components/adjustment/LED
+    geometry); entities whose ``unique_id`` was already added are skipped,
+    so a snapshot that arrives late (after a slow connect) or that reports
+    something new still adds the missing entities, exactly once.
 
-    Confirmed live (Phase 5+6): omitting this wait reliably produced zero
-    live component switches/number entities on a fresh HA start (verified
-    via ``"restored": true`` ghost entities in ``/api/states`` -- the
-    registry remembered them from a prior run, but no live entity backed
-    them this time).
-
-    Falls back to whatever ``coordinator.data`` currently holds (even if
-    still disconnected) once ``timeout`` elapses, matching every other
-    entity's own graceful handling of a slow/failed connection -- entities
-    just end up unavailable rather than setup hanging forever.
+    The ``SIGNAL_INSTANCE_READY`` listener is connected before anything is
+    inspected, and per-coordinator tracking is idempotent, so an instance
+    created while this runs is never missed nor double-handled.
     """
-    if coordinator.data.connected:
-        return coordinator.data
+    runtime = entry.runtime_data
+    tracked: dict[int, HyperHdrInstanceCoordinator] = {}
+    added: dict[int, set[str]] = {}
 
-    became_connected = asyncio.Event()
+    def _add_missing(coordinator: HyperHdrInstanceCoordinator, instance_id: int) -> None:
+        seen = added.setdefault(instance_id, set())
+        new = [e for e in build(entry, coordinator.data, coordinator, instance_id) if e.unique_id not in seen]
+        if new:
+            seen.update(e.unique_id for e in new)
+            async_add_entities(new)
 
-    def _on_update() -> None:
-        if coordinator.data is not None and coordinator.data.connected:
-            became_connected.set()
+    async def _track(instance_id: int) -> None:
+        coordinator = runtime.instance_coordinators.get(instance_id)
+        if coordinator is None or tracked.get(instance_id) is coordinator:
+            return
+        if instance_id in tracked:  # instance deleted and re-created: fresh coordinator, fresh registry
+            added.pop(instance_id, None)
+        tracked[instance_id] = coordinator
 
-    unsubscribe = coordinator.async_add_listener(_on_update)
-    try:
-        await asyncio.wait_for(became_connected.wait(), timeout=timeout)
-    except TimeoutError:
-        pass
-    finally:
-        unsubscribe()
-    return coordinator.data
+        def _on_update() -> None:
+            if coordinator.data is not None and coordinator.data.connected:
+                _add_missing(coordinator, instance_id)
+
+        entry.async_on_unload(coordinator.async_add_listener(_on_update))
+        _on_update()
+
+    entry.async_on_unload(async_dispatcher_connect(hass, f"{SIGNAL_INSTANCE_READY}_{entry.entry_id}", _track))
+    for instance_id in list(runtime.instance_coordinators):
+        await _track(instance_id)
 
 
 class HyperHdrServerEntity(CoordinatorEntity[HyperHdrServerCoordinator]):
@@ -167,6 +168,12 @@ class HyperHdrServerEntity(CoordinatorEntity[HyperHdrServerCoordinator]):
         uid = server_uid(entry)
         self._attr_unique_id = f"{uid}_{key}"
         self._attr_device_info = server_device_info(coordinator, entry)
+
+    @property
+    def available(self) -> bool:
+        """Unavailable while the server connection itself is down."""
+        data = self.coordinator.data
+        return bool(super().available) and data is not None and data.connected
 
 
 class HyperHdrInstanceEntity(CoordinatorEntity[HyperHdrInstanceCoordinator]):

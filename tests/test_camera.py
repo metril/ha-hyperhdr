@@ -15,8 +15,9 @@ from PIL import Image
 from custom_components.hyperhdr.camera import (
     _PREVIEW_SIZE,
     HyperHdrLedPreviewCamera,
-    _entities_for_instance,
+    _entities_for_data,
     aspect_fit,
+    async_setup_entry,
     encode_jpeg,
     paint_leds,
     render_led_preview,
@@ -182,7 +183,7 @@ class TestEntitiesForInstanceLedGeometryGuard:
         entry, coordinator = _make_setup()
         coordinator.async_set_updated_data(_instance_data(led_geometry=()))
 
-        entities = await _entities_for_instance(entry, coordinator, 1)
+        entities = _entities_for_data(entry, coordinator.data, coordinator, 1)
 
         assert entities == []
 
@@ -190,11 +191,23 @@ class TestEntitiesForInstanceLedGeometryGuard:
         entry, coordinator = _make_setup()
         coordinator.async_set_updated_data(_instance_data(led_geometry=tuple(_row_geometry(2))))
 
-        entities = await _entities_for_instance(entry, coordinator, 1)
+        entities = _entities_for_data(entry, coordinator.data, coordinator, 1)
 
         assert len(entities) == 1
         assert isinstance(entities[0], HyperHdrLedPreviewCamera)
         assert entities[0]._attr_entity_registry_enabled_default is False  # noqa: SLF001
+
+    async def test_late_geometry_adds_the_camera_once(self) -> None:
+        hass = FakeHass()
+        entry, coordinator = _make_setup()
+        coordinator.async_set_updated_data(_instance_data(led_geometry=()))
+        added: list[object] = []
+        await async_setup_entry(hass, entry, lambda new: added.extend(new))  # type: ignore[arg-type]
+        assert added == []
+
+        coordinator.async_set_updated_data(_instance_data(led_geometry=tuple(_row_geometry(2))))
+        coordinator.async_set_updated_data(_instance_data(led_geometry=tuple(_row_geometry(3))))
+        assert len(added) == 1
 
 
 class _FakeStreamResponse:
@@ -210,6 +223,8 @@ class _FakeStreamResponse:
 
 
 class _FakeLedClient:
+    connected = True
+
     def __init__(self) -> None:
         self.started: list[Any] = []
         self.stopped: list[Any] = []
@@ -253,3 +268,28 @@ class TestMjpegStreamExit:
     async def test_exits_when_client_detached(self, monkeypatch: Any) -> None:
         client = await self._run(monkeypatch, detach=True)
         assert len(client.stopped) == 1
+
+
+class TestCameraGuards:
+    async def test_still_returns_none_when_client_not_connected(self) -> None:
+        entry, coordinator = _make_setup()
+        client = _FakeLedClient()
+        client.connected = False
+        coordinator.client = client  # type: ignore[assignment]
+        entity = HyperHdrLedPreviewCamera(coordinator, entry, 1)  # type: ignore[arg-type]
+        assert await entity.async_camera_image() is None
+        assert client.started == []
+
+    async def test_start_ledstream_error_returns_none(self) -> None:
+        from custom_components.hyperhdr.exceptions import HyperHdrApiError
+
+        entry, coordinator = _make_setup()
+        client = _FakeLedClient()
+
+        async def _boom(cb: Any) -> None:
+            raise HyperHdrApiError(command="ledcolors", error="no")
+
+        client.start_ledstream = _boom  # type: ignore[method-assign]
+        coordinator.client = client  # type: ignore[assignment]
+        entity = HyperHdrLedPreviewCamera(coordinator, entry, 1)  # type: ignore[arg-type]
+        assert await entity.async_camera_image() is None

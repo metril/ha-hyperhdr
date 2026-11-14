@@ -3,7 +3,8 @@ adjustment writes."""
 
 from __future__ import annotations
 
-import asyncio
+from dataclasses import replace
+from typing import Any
 
 import pytest
 from conftest import FakeConfigEntry, FakeDomainClient, FakeHass
@@ -22,7 +23,7 @@ from custom_components.hyperhdr.models import (
     HyperHdrServerData,
     HyperHdrSysInfo,
 )
-from custom_components.hyperhdr.number import NUMBERS, HyperHdrAdjustmentNumber, _entities_for_instance
+from custom_components.hyperhdr.number import NUMBERS, HyperHdrAdjustmentNumber, _entities_for_data, async_setup_entry
 
 
 def _adjustment(raw: dict[str, object], **typed: object) -> HyperHdrAdjustment:
@@ -77,9 +78,6 @@ def _make_setup(
     )
     coordinator = HyperHdrInstanceCoordinator(hass, entry, 1)
     entry.runtime_data.instance_coordinators[1] = coordinator
-    # connected=True in _instance_data means wait_for_connected_data's fast
-    # path (no actual waiting) applies -- these tests are about entity-set
-    # building logic, not the bounded-wait mechanism itself.
     coordinator.async_set_updated_data(_instance_data(adjustment))
     client = FakeDomainClient()
     coordinator.client = client  # type: ignore[assignment]
@@ -98,72 +96,47 @@ class TestPresenceBasedCreation:
             "temperatureBlue": 1,
         }
         entry, coordinator, _client = _make_setup(_adjustment(raw))
-        entities = await _entities_for_instance(entry, coordinator, 1)
+        entities = _entities_for_data(entry, coordinator.data, coordinator, 1)
         assert {e.entity_description.key for e in entities} == {d.key for d in NUMBERS}
 
     async def test_no_fields_present_creates_nothing(self) -> None:
         entry, coordinator, _client = _make_setup(_adjustment({}))
-        entities = await _entities_for_instance(entry, coordinator, 1)
+        entities = _entities_for_data(entry, coordinator.data, coordinator, 1)
         assert entities == []
 
     async def test_only_some_fields_present_creates_only_those(self) -> None:
         raw = {"luminanceGain": 1, "gamma": 1.5}
         entry, coordinator, _client = _make_setup(_adjustment(raw))
-        entities = await _entities_for_instance(entry, coordinator, 1)
+        entities = _entities_for_data(entry, coordinator.data, coordinator, 1)
         assert {e.entity_description.key for e in entities} == {"luminance_gain", "gamma"}
 
     async def test_unique_ids(self) -> None:
         raw = {"luminanceGain": 1}
         entry, coordinator, _client = _make_setup(_adjustment(raw))
-        entities = await _entities_for_instance(entry, coordinator, 1)
+        entities = _entities_for_data(entry, coordinator.data, coordinator, 1)
         assert entities[0]._attr_unique_id == "srv-uid_1_luminance_gain"
         assert entities[0]._attr_entity_category is not None  # CONFIG
 
-    async def test_waits_for_connected_data_instead_of_building_off_the_disconnected_placeholder(self) -> None:
-        """Regression (found live, Phase 5+6): see the identical test in
-        test_switch.py for the full rationale -- a freshly constructed
-        coordinator's ``.data`` is the disconnected placeholder (empty
-        ``adjustment.raw``) until its client's connect handshake completes;
-        building the presence-gated number set against that placeholder
-        would silently create zero entities, permanently, for this pass."""
+    async def test_late_connected_snapshot_adds_missing_numbers_once(self) -> None:
+        """Entities for fields from a connected snapshot that arrives after
+        setup are added on that update, and never duplicated."""
         hass = FakeHass()
-        entry = FakeConfigEntry(entry_id="entry1", unique_id="srv-uid", data={"host": "10.0.0.5", "port": 8090})
-        server_coordinator = HyperHdrServerCoordinator(hass, entry, object())  # type: ignore[arg-type]
-        server_coordinator.async_set_updated_data(
-            HyperHdrServerData(
-                sysinfo=HyperHdrSysInfo(id="dev", hostname="host", version="22", build="b"),
-                instances={1: HyperHdrInstanceSummary(instance=1, friendly_name="Living Room", running=True)},
-                connected=True,
-            )
-        )
-        entry.runtime_data = HyperHdrRuntimeData(  # type: ignore[attr-defined]
-            server_client=object(),  # type: ignore[arg-type]
-            server_coordinator=server_coordinator,
-            instance_coordinators={},
-            default_priority=128,
-            hidden_effects=set(),
-        )
-        coordinator = HyperHdrInstanceCoordinator(hass, entry, 1)
-        entry.runtime_data.instance_coordinators[1] = coordinator
-        assert coordinator.data.connected is False
-        assert coordinator.data.adjustment.raw == {}
+        entry, coordinator, _client = _make_setup(_adjustment({}))
+        coordinator.async_set_updated_data(replace(coordinator.data, connected=False))
+        added: list[Any] = []
+        await async_setup_entry(hass, entry, lambda new: added.extend(new))  # type: ignore[arg-type]
+        assert added == []
 
-        async def _connect_shortly_after() -> None:
-            await asyncio.sleep(0)
-            coordinator.async_set_updated_data(_instance_data(_adjustment({"luminanceGain": 1})))
-
-        populate_task = asyncio.ensure_future(_connect_shortly_after())
-        entities = await _entities_for_instance(entry, coordinator, 1)
-        await populate_task
-
-        assert {e.entity_description.key for e in entities} == {"luminance_gain"}
+        coordinator.async_set_updated_data(_instance_data(_adjustment({"luminanceGain": 1})))
+        coordinator.async_set_updated_data(_instance_data(_adjustment({"luminanceGain": 1, "gamma": 1.5})))
+        assert [e.entity_description.key for e in added] == ["luminance_gain", "gamma"]
 
 
 class TestNativeValue:
     async def test_reads_typed_field(self) -> None:
         raw = {"luminanceGain": 1}
         entry, coordinator, _client = _make_setup(_adjustment(raw, luminance_gain=0.42))
-        entities = await _entities_for_instance(entry, coordinator, 1)
+        entities = _entities_for_data(entry, coordinator.data, coordinator, 1)
         assert entities[0].native_value == 0.42
 
 
@@ -171,14 +144,14 @@ class TestAsyncSetNativeValue:
     async def test_sets_single_field(self) -> None:
         raw = {"luminanceGain": 1}
         entry, coordinator, client = _make_setup(_adjustment(raw))
-        entities = await _entities_for_instance(entry, coordinator, 1)
+        entities = _entities_for_data(entry, coordinator.data, coordinator, 1)
         await entities[0].async_set_native_value(0.7)
         assert client.calls == [("async_set_adjustment", (), {"luminance_gain": 0.7})]
 
     async def test_temperature_field_rounds_to_int(self) -> None:
         raw = {"temperatureRed": 1}
         entry, coordinator, client = _make_setup(_adjustment(raw))
-        entities = await _entities_for_instance(entry, coordinator, 1)
+        entities = _entities_for_data(entry, coordinator.data, coordinator, 1)
         assert entities[0].entity_description.key == "temperature_red"
         await entities[0].async_set_native_value(128.0)
         assert client.calls == [("async_set_adjustment", (), {"temperature_red": 128})]
@@ -188,7 +161,7 @@ class TestAsyncSetNativeValue:
         raw = {"luminanceGain": 1}
         entry, coordinator, _client = _make_setup(_adjustment(raw))
         coordinator.client = FakeDomainClient(raise_on=HyperHdrError("boom"))  # type: ignore[assignment]
-        entities = await _entities_for_instance(entry, coordinator, 1)
+        entities = _entities_for_data(entry, coordinator.data, coordinator, 1)
         with pytest.raises(HomeAssistantError):
             await entities[0].async_set_native_value(0.1)
 

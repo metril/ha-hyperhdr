@@ -20,7 +20,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
+from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlowWithReload
 from homeassistant.const import CONF_HOST, CONF_PORT
 from homeassistant.core import callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -33,8 +33,10 @@ from .flow_support import (
     connection_schema,
     host_port_from_ssdp,
     options_schema,
+    reauth_data,
     reauth_schema,
     token_schema,
+    udn_to_unique_id,
 )
 
 if TYPE_CHECKING:
@@ -210,18 +212,13 @@ class HyperHdrConfigFlow(ConfigFlow, domain=DOMAIN):  # type: ignore[call-arg]
         if host is None or port is None:
             return self.async_abort(reason="cannot_connect")
 
-        # Best-effort early dedup keyed off the UPnP UDN -- NOT the same
-        # namespace as the entry's real unique_id (the server's own
-        # sysinfo id, set authoritatively in `_finish_setup_flow`), so this
-        # is purely a fast-path: it can only help (skip a redundant
-        # confirm+connect for an obvious repeat announcement of an
-        # already-configured device), never wrongly abort a legitimate new
-        # device, since a UDN string can't collide with a sysinfo-id
-        # unique_id already stored for a different entry.
+        # Early dedup keyed off the UPnP UDN. HyperHDR announces
+        # ``<UDN>uuid:<sysinfo id></UDN>`` (SSDPDescription.h), and the
+        # entry's unique_id is the bare sysinfo id, so strip the prefix.
         udn = discovery_info.ssdp_udn
         if udn:
-            await self.async_set_unique_id(udn)
-            self._abort_if_unique_id_configured(updates={CONF_HOST: host, CONF_PORT: port})
+            await self.async_set_unique_id(udn_to_unique_id(udn))
+            self._abort_if_unique_id_configured(updates={CONF_HOST: host})
 
         self._data = {CONF_HOST: host, CONF_PORT: port, CONF_USE_SSL: False, CONF_VERIFY_SSL: True}
         friendly_name = discovery_info.upnp.get("friendlyName") or host
@@ -243,18 +240,11 @@ class HyperHdrConfigFlow(ConfigFlow, domain=DOMAIN):  # type: ignore[call-arg]
         reauth_entry = self._get_reauth_entry()
 
         if user_input is not None:
-            updates: dict[str, Any] = {}
-            token = user_input.get(CONF_TOKEN) or None
-            admin_password = user_input.get(CONF_ADMIN_PASSWORD) or None
-            if token:
-                updates[CONF_TOKEN] = token
-            if admin_password:
-                updates[CONF_ADMIN_PASSWORD] = admin_password
-            candidate = {**reauth_entry.data, **updates}
+            candidate = reauth_data(reauth_entry.data, user_input)
 
             result = await _async_validate_connection(self.hass, candidate)
             if result.error is None:
-                return self.async_update_reload_and_abort(reauth_entry, data_updates=updates)
+                return self.async_update_reload_and_abort(reauth_entry, data=candidate)
             errors["base"] = result.error
 
         token_required = await self._async_probe_token_required(reauth_entry.data)
@@ -292,9 +282,20 @@ class HyperHdrConfigFlow(ConfigFlow, domain=DOMAIN):  # type: ignore[call-arg]
             result = await _async_validate_connection(self.hass, candidate)
             if result.error is None:
                 assert result.sysinfo is not None
+                new_unique_id: str | None = None
                 if result.sysinfo.id:
                     await self.async_set_unique_id(result.sysinfo.id)
-                    self._abort_if_unique_id_mismatch(reason="wrong_device")
+                    if reconfigure_entry.unique_id is None:
+                        # Entry predates unique ids: adopt the server's own
+                        # (unless another entry already owns it).
+                        self._abort_if_unique_id_configured()
+                        new_unique_id = result.sysinfo.id
+                    else:
+                        self._abort_if_unique_id_mismatch(reason="wrong_device")
+                if new_unique_id is not None:
+                    return self.async_update_reload_and_abort(
+                        reconfigure_entry, unique_id=new_unique_id, data_updates=user_input
+                    )
                 return self.async_update_reload_and_abort(reconfigure_entry, data_updates=user_input)
             errors["base"] = result.error
 
@@ -320,13 +321,11 @@ class HyperHdrConfigFlow(ConfigFlow, domain=DOMAIN):  # type: ignore[call-arg]
         return HyperHdrOptionsFlow()
 
 
-class HyperHdrOptionsFlow(OptionsFlow):
+class HyperHdrOptionsFlow(OptionsFlowWithReload):
     """Single-form options: default priority, hidden effects, timeouts.
 
-    Plain ``OptionsFlow`` deliberately -- not ``OptionsFlowWithReload``
-    (which explicitly forbids coexisting with a config entry update
-    listener, and __init__.py already has one that reloads on options
-    change) and not the deprecated ``OptionsFlowWithConfigEntry``.
+    ``OptionsFlowWithReload`` reloads the entry when options change, so
+    there is deliberately no entry update listener in ``__init__.py``.
     """
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:

@@ -20,7 +20,7 @@ from conftest import FakeConfigEntry, FakeHass, FakeInstanceClient, FakeServerCl
 
 import custom_components.hyperhdr as hyperhdr
 from custom_components.hyperhdr.exceptions import HyperHdrError  # noqa: F401 (sanity: real module still resolves)
-from custom_components.hyperhdr.models import HyperHdrSysInfo
+from custom_components.hyperhdr.models import HyperHdrInstanceSummary, HyperHdrSysInfo
 
 pytestmark = pytest.mark.usefixtures("_fast_connect_timeout")
 
@@ -74,25 +74,31 @@ class TestAsyncSetupEntryHappyPath:
         assert runtime.server_coordinator.data.sysinfo.hostname == "hyperhdr-host"
         assert runtime.instance_coordinators == {}
         assert hass.config_entries.forward_calls == [(entry, hyperhdr.PLATFORMS)]
-        assert entry.update_listeners  # add_update_listener was registered
+        assert not entry.update_listeners  # options reload comes from OptionsFlowWithReload
+        assert not hass.services.has_service("hyperhdr", "clear")  # registered by async_setup, not per entry
 
-    async def test_instance_update_push_before_runtime_data_assigned_does_not_crash(
+    async def test_instance_update_push_before_runtime_data_assigned_is_replayed(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Guards a narrow race: the instance-update subscription (sent as
-        part of the connect handshake) can only go live once on_connected
-        has already fired, but there's a brief window after that -- before
-        runtime_data is assigned -- where a push could still land."""
+        """A roster push landing after on_connected but before runtime_data
+        exists is stashed and replayed once setup completes."""
         hass = FakeHass()
         entry = _entry()
-        clients = _patch_server_client(monkeypatch)
+        factory = _patch_server_client(monkeypatch)
+        orig = hyperhdr.HyperHdrServerClient
+
+        def _racing(session: Any, host: str, port: int, **kwargs: Any) -> FakeServerClient:
+            client = orig(session, host, port, **kwargs)
+            client.push_during_start = {"data": [{"instance": 1, "friendly_name": "New", "running": False}]}
+            return client  # type: ignore[no-any-return]
+
+        monkeypatch.setattr(hyperhdr, "HyperHdrServerClient", _racing)
+        del factory
 
         await hyperhdr.async_setup_entry(hass, entry)  # type: ignore[arg-type]
-        push_cb = clients[0].push_callbacks[hyperhdr.INSTANCE_UPDATE_TOPIC]
-        del entry.runtime_data  # type: ignore[attr-defined]
+        await hass.async_block_till_done()
 
-        push_cb({"data": [{"instance": 0, "friendly_name": "First", "running": True}]})
-        await hass.async_block_till_done()  # must not raise
+        assert 1 in entry.runtime_data.server_coordinator.data.instances  # type: ignore[attr-defined]
 
     async def test_purges_stale_first_instance_running_switch_registry_entry(
         self, monkeypatch: pytest.MonkeyPatch
@@ -436,7 +442,36 @@ class TestAsyncUnloadEntry:
         hass.config_entries.unload_result = False
 
         assert await hyperhdr.async_unload_entry(hass, entry) is False  # type: ignore[arg-type]
-        assert clients[0].stop_calls == 0
+        assert clients[0].stop_calls == 0  # a failed unload leaves everything running
+        assert entry.runtime_data.unloading is False  # type: ignore[attr-defined]
+
+    async def test_diff_after_unload_started_is_a_noop(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        hass = FakeHass()
+        entry = _entry()
+        _patch_server_client(monkeypatch)
+        await hyperhdr.async_setup_entry(hass, entry)  # type: ignore[arg-type]
+        await hyperhdr.async_unload_entry(hass, entry)  # type: ignore[arg-type]
+        assert entry.runtime_data.unloading is True  # type: ignore[attr-defined]
+
+        called = False
+
+        async def _boom(*a: Any, **k: Any) -> None:
+            nonlocal called
+            called = True
+
+        monkeypatch.setattr(hyperhdr, "_async_start_instance", _boom)
+        running = {1: HyperHdrInstanceSummary(instance=1, friendly_name="x", running=True)}
+        await hyperhdr._async_handle_instance_diff(hass, entry, running)  # type: ignore[arg-type]
+        assert called is False
+
+    async def test_stop_handler_sets_unloading(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        hass = FakeHass()
+        entry = _entry()
+        _patch_server_client(monkeypatch)
+        await hyperhdr.async_setup_entry(hass, entry)  # type: ignore[arg-type]
+        (listener,) = hass.bus.once_listeners["homeassistant_stop"]
+        await listener(None)
+        assert entry.runtime_data.unloading is True  # type: ignore[attr-defined]
 
     async def test_services_survive_last_entry_unload(self, monkeypatch: pytest.MonkeyPatch) -> None:
         hass = FakeHass()
@@ -464,3 +499,98 @@ class TestAsyncUnloadEntry:
         entry = _entry()
         result = await hyperhdr.async_unload_entry(hass, entry)  # type: ignore[arg-type]
         assert result is True
+
+
+class TestSetupFailureAndLifecycle:
+    async def test_sysinfo_error_stops_client_and_raises_not_ready(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from homeassistant.exceptions import ConfigEntryNotReady
+
+        hass = FakeHass()
+        entry = _entry()
+        clients = _patch_server_client(monkeypatch)
+        orig = hyperhdr.HyperHdrServerClient
+
+        def _failing(session: Any, host: str, port: int, **kwargs: Any) -> FakeServerClient:
+            client = orig(session, host, port, **kwargs)
+
+            async def _boom() -> Any:
+                raise HyperHdrError("sysinfo failed")
+
+            client.async_sysinfo = _boom  # type: ignore[method-assign]
+            clients.append(client)
+            return client  # type: ignore[no-any-return]
+
+        monkeypatch.setattr(hyperhdr, "HyperHdrServerClient", _failing)
+
+        with pytest.raises(ConfigEntryNotReady):
+            await hyperhdr.async_setup_entry(hass, entry)  # type: ignore[arg-type]
+
+        assert clients[-1].stop_calls == 1
+        assert not hasattr(entry, "runtime_data")
+
+    async def test_ha_stop_event_stops_all_clients(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        hass = FakeHass()
+        entry = _entry()
+        clients = _patch_server_client(
+            monkeypatch, connect_info={"instance": [{"instance": 1, "friendly_name": "A", "running": True}]}
+        )
+        made: list[FakeInstanceClient] = []
+
+        async def _factory(hass: Any, entry: Any, instance_id: int) -> FakeInstanceClient:
+            made.append(FakeInstanceClient(instance_id))
+            return made[-1]
+
+        monkeypatch.setattr(hyperhdr, "_async_create_instance_client", _factory)
+        await hyperhdr.async_setup_entry(hass, entry)  # type: ignore[arg-type]
+
+        (listener,) = hass.bus.once_listeners["homeassistant_stop"]
+        await listener(None)
+
+        assert clients[0].stop_calls == 1
+        assert made[0].stop_calls == 1
+
+    async def test_failed_unload_does_not_stop_clients(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        hass = FakeHass()
+        entry = _entry()
+        clients = _patch_server_client(monkeypatch)
+        await hyperhdr.async_setup_entry(hass, entry)  # type: ignore[arg-type]
+
+        async def _fail(entry: Any, platforms: Any) -> bool:
+            return False
+
+        monkeypatch.setattr(hass.config_entries, "async_unload_platforms", _fail)
+
+        assert await hyperhdr.async_unload_entry(hass, entry) is False  # type: ignore[arg-type]
+        assert clients[0].stop_calls == 0  # nothing stopped when the platform unload fails
+
+    async def test_unload_stops_server_before_instances(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        hass = FakeHass()
+        entry = _entry()
+        order: list[str] = []
+        clients = _patch_server_client(
+            monkeypatch, connect_info={"instance": [{"instance": 1, "friendly_name": "A", "running": True}]}
+        )
+
+        async def _factory(hass: Any, entry: Any, instance_id: int) -> FakeInstanceClient:
+            client = FakeInstanceClient(instance_id)
+            orig_stop = client.stop
+
+            async def _stop() -> None:
+                order.append("instance")
+                await orig_stop()
+
+            client.stop = _stop  # type: ignore[method-assign]
+            return client
+
+        monkeypatch.setattr(hyperhdr, "_async_create_instance_client", _factory)
+        await hyperhdr.async_setup_entry(hass, entry)  # type: ignore[arg-type]
+        orig_server_stop = clients[0].stop
+
+        async def _server_stop() -> None:
+            order.append("server")
+            await orig_server_stop()
+
+        clients[0].stop = _server_stop  # type: ignore[method-assign]
+
+        assert await hyperhdr.async_unload_entry(hass, entry) is True  # type: ignore[arg-type]
+        assert order == ["server", "instance"]

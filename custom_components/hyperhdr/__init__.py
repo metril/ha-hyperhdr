@@ -15,7 +15,7 @@ import logging
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
-from homeassistant.const import CONF_HOST, CONF_PORT, Platform
+from homeassistant.const import CONF_HOST, CONF_PORT, EVENT_HOMEASSISTANT_STOP, Platform
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
@@ -47,7 +47,7 @@ from .const import (
 )
 from .coordinator import HyperHdrInstanceCoordinator, HyperHdrRuntimeData, HyperHdrServerCoordinator, _diff_instances
 from .entity import server_device_info, server_uid
-from .exceptions import HyperHdrConnectionError
+from .exceptions import HyperHdrConnectionError, HyperHdrError
 from .models import HyperHdrServerData
 from .services import async_setup_services
 
@@ -138,6 +138,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: HyperHdrConfigEntry) -> 
     connected_event = asyncio.Event()
     last_connect_info: dict[str, Any] = {}
     auth_failed_during_setup = False
+    # Latest instance-update push that landed before runtime_data existed;
+    # replayed once setup has finished.
+    dropped_roster_push: dict[str, Any] | None = None
 
     async def _handle_connected(info: dict[str, Any]) -> None:
         nonlocal last_connect_info
@@ -195,14 +198,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: HyperHdrConfigEntry) -> 
         entry.async_start_reauth(hass)
 
     def _handle_instance_update_push(frame: dict[str, Any]) -> None:
+        nonlocal dropped_roster_push
         if not hasattr(entry, "runtime_data"):
             # Narrow race: the subscription (sent as part of the connect
             # handshake's own serverinfo call) only goes live once
             # on_connected has already fired, but there's a brief window
             # after that -- before runtime_data is assigned below -- where
-            # a real push could still arrive. The roster async_setup_entry
-            # is about to seed from already reflects this, so it's safe
-            # to drop.
+            # a real push could still arrive. Stash it; setup replays the
+            # latest one once the diff handler can run.
+            dropped_roster_push = frame
             return
         roster = HyperHdrServerData.instances_from_roster(frame.get("data", []))
         entry.async_create_background_task(
@@ -238,8 +242,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: HyperHdrConfigEntry) -> 
         await client.stop()
         raise ConfigEntryAuthFailed("authentication failed while connecting to HyperHDR")
 
+    async def _handle_ha_stop(_event: Any) -> None:
+        runtime = getattr(entry, "runtime_data", None)
+        if runtime is not None:
+            await _async_stop_all_clients(runtime)
+
     try:
-        sysinfo = await client.async_sysinfo()
+        try:
+            sysinfo = await client.async_sysinfo()
+        except HyperHdrError as err:
+            raise ConfigEntryNotReady(f"failed connecting to {entry.data.get(CONF_HOST)}: {err}") from err
         roster = HyperHdrServerData.instances_from_roster(last_connect_info.get("instance", []))
 
         server_coordinator = HyperHdrServerCoordinator(hass, entry, client)
@@ -249,7 +261,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: HyperHdrConfigEntry) -> 
             server_client=client,
             server_coordinator=server_coordinator,
             instance_coordinators={},
-            default_priority=options.get(OPT_DEFAULT_PRIORITY, DEFAULT_PRIORITY),
+            default_priority=int(options.get(OPT_DEFAULT_PRIORITY, DEFAULT_PRIORITY)),
             hidden_effects=set(options.get(OPT_HIDDEN_EFFECTS, [])),
         )
 
@@ -291,7 +303,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: HyperHdrConfigEntry) -> 
                 _LOGGER.warning("failed to connect to instance %s during setup: %s", instance_id, result)
 
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-        entry.async_on_unload(entry.add_update_listener(_async_update_listener))
+        entry.async_on_unload(hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _handle_ha_stop))
+        if dropped_roster_push is not None:
+            replay_roster = HyperHdrServerData.instances_from_roster(dropped_roster_push.get("data", []))
+            entry.async_create_background_task(
+                hass,
+                _async_handle_instance_diff(hass, entry, replay_roster),
+                f"{DOMAIN}_instance_diff_replay_{entry.entry_id}",
+            )
     except BaseException:
         runtime = getattr(entry, "runtime_data", None)
         if runtime is not None:
@@ -307,23 +326,47 @@ async def async_setup_entry(hass: HomeAssistant, entry: HyperHdrConfigEntry) -> 
     return True
 
 
-async def _async_update_listener(hass: HomeAssistant, entry: HyperHdrConfigEntry) -> None:
-    """Options changed -- reload the entry."""
-    await hass.config_entries.async_reload(entry.entry_id)
+async def _async_stop_all_clients(runtime: HyperHdrRuntimeData) -> None:
+    """Stop the server client first (so it can't spawn new instance clients
+    via roster pushes), then every instance client under the diff lock."""
+    await runtime.server_client.stop()
+    async with runtime.diff_lock:
+        runtime.unloading = True
+        for instance_coordinator in list(runtime.instance_coordinators.values()):
+            if instance_coordinator.client is not None:
+                await instance_coordinator.client.stop()
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: HyperHdrConfigEntry) -> bool:
     """Unload a config entry. Idempotent -- safe even if clients are already stopped."""
-    unload_ok: bool = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-    if not unload_ok:
-        return False
-
     runtime = getattr(entry, "runtime_data", None)
     if runtime is not None:
-        for instance_coordinator in runtime.instance_coordinators.values():
-            if instance_coordinator.client is not None:
-                await instance_coordinator.client.stop()
+        # Block queued diffs BEFORE the platforms go, so a diff can't build
+        # coordinators/entities against them. Nothing is stopped yet: a
+        # failed platform unload must leave the entry fully running.
+        async with runtime.diff_lock:
+            runtime.unloading = True
+
+    unload_ok: bool = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    if not unload_ok:
+        if runtime is not None:
+            runtime.unloading = False
+            # Roster pushes arriving while blocked were skipped; reconcile now.
+            data = runtime.server_coordinator.data
+            if runtime.server_client.connected and data is not None:
+                entry.async_create_background_task(
+                    hass,
+                    _async_handle_instance_diff(hass, entry, dict(data.instances)),
+                    f"{DOMAIN}_instance_diff_resync_{entry.entry_id}",
+                )
+        return False
+
+    if runtime is not None:
         await runtime.server_client.stop()
+        async with runtime.diff_lock:
+            for instance_coordinator in list(runtime.instance_coordinators.values()):
+                if instance_coordinator.client is not None:
+                    await instance_coordinator.client.stop()
 
     return unload_ok
 
@@ -417,6 +460,8 @@ async def _async_handle_instance_diff(
     if runtime is None:
         return
     async with runtime.diff_lock:
+        if runtime.unloading:
+            return
         old_roster = runtime.server_coordinator.data.instances if runtime.server_coordinator.data else {}
         diff = _diff_instances(old_roster, new_roster)
 

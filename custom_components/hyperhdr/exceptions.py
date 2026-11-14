@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from homeassistant.exceptions import HomeAssistantError
+
+from .const import DOMAIN
+
 
 class HyperHdrError(Exception):
     """Base exception for all HyperHDR errors."""
@@ -30,3 +34,12 @@ class HyperHdrAuthError(HyperHdrError):
 
     Covers a missing/invalid API token or a failed admin login.
     """
+
+
+def translated_error(key: str, **placeholders: object) -> HomeAssistantError:
+    """A ``HomeAssistantError`` carrying a translatable message (``exceptions`` section of strings.json)."""
+    return HomeAssistantError(
+        translation_domain=DOMAIN,
+        translation_key=key,
+        translation_placeholders={name: str(value) for name, value in placeholders.items()},
+    )

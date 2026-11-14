@@ -1,8 +1,8 @@
 [project]
 name = "ha-hyperhdr"
-version = "0.3.0"
+version = "0.4.0"
 description = "Home Assistant integration for HyperHDR ambient lighting"
-requires-python = ">=3.13"
+requires-python = ">=3.14.2"
 license = "MIT"
 dependencies = ["aiohttp>=3.9.0", "voluptuous>=0.13.1"]
 
@@ -13,17 +13,19 @@ dev = [
     "pytest>=9.0.0",
     "pytest-asyncio>=1.0.0",
     "pillow>=12.3.0",
+    "pytest-xdist>=3.6.0",
+    "pytest-split>=0.10.0",
 ]
 
 [tool.ruff]
-target-version = "py313"
+target-version = "py314"
 line-length = 120
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "TC"]
 
 [tool.mypy]
-python_version = "3.13"
+python_version = "3.14"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
@@ -34,3 +36,4 @@ ignore_missing_imports = true
 testpaths = ["tests"]
 asyncio_mode = "auto"
 pythonpath = ["."]
+addopts = "-n auto"

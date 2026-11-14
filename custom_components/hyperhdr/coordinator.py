@@ -140,7 +140,9 @@ class HyperHdrServerCoordinator(DataUpdateCoordinator[HyperHdrServerData]):
     """
 
     def __init__(self, hass: HomeAssistant, entry: HyperHdrConfigEntry, server_client: HyperHdrServerClient) -> None:
-        super().__init__(hass, _LOGGER, name=f"{DOMAIN} server", update_interval=None, config_entry=entry)
+        super().__init__(
+            hass, _LOGGER, name=f"{DOMAIN} server", update_interval=None, config_entry=entry, always_update=False
+        )
         self.server_client = server_client
 
 
@@ -166,7 +168,12 @@ class HyperHdrInstanceCoordinator(DataUpdateCoordinator[HyperHdrInstanceData]):
 
     def __init__(self, hass: HomeAssistant, entry: HyperHdrConfigEntry, instance_id: int) -> None:
         super().__init__(
-            hass, _LOGGER, name=f"{DOMAIN} instance {instance_id}", update_interval=None, config_entry=entry
+            hass,
+            _LOGGER,
+            name=f"{DOMAIN} instance {instance_id}",
+            update_interval=None,
+            config_entry=entry,
+            always_update=False,
         )
         self.instance_id = instance_id
         self.client: HyperHdrInstanceClient | None = None
@@ -245,3 +252,5 @@ class HyperHdrRuntimeData:
     # Serializes the instance-roster diff (reconnect, roster push, initial
     # startup burst) so overlapping runs can never double-create an instance.
     diff_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    # Set (under diff_lock) once unload begins; later diffs become no-ops.
+    unloading: bool = False

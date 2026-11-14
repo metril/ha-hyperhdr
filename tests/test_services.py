@@ -35,7 +35,9 @@ def _make_setup(
     *, default_priority: int = 128
 ) -> tuple[FakeHass, FakeConfigEntry, HyperHdrInstanceCoordinator, FakeDomainClient]:
     hass = FakeHass()
-    entry = FakeConfigEntry(entry_id="entry1", unique_id="srv-uid", data={"host": "10.0.0.5", "port": 8090})
+    entry = FakeConfigEntry(
+        entry_id="entry1", unique_id="srv-uid", data={"host": "10.0.0.5", "port": 8090}, state="loaded"
+    )
     hass.config_entries.entries.append(entry)  # _resolve_device scans this
 
     server_coordinator = HyperHdrServerCoordinator(hass, entry, object())  # type: ignore[arg-type]
@@ -76,7 +78,7 @@ class TestResolveDevice:
 
     def test_server_device_raises_a_friendly_not_instance_error(self) -> None:
         hass, _entry, _coordinator, _client = _make_setup()
-        with pytest.raises(ServiceValidationError, match="instance device"):
+        with pytest.raises(ServiceValidationError, match="server_device_target"):
             _resolve_device(hass, "device-server")  # type: ignore[arg-type]
 
     def test_device_from_a_different_integration_raises(self) -> None:
@@ -88,7 +90,7 @@ class TestResolveDevice:
     def test_disconnected_instance_raises_not_connected_error(self) -> None:
         hass, _entry, coordinator, _client = _make_setup()
         coordinator.client = None
-        with pytest.raises(ServiceValidationError, match="not connected"):
+        with pytest.raises(ServiceValidationError, match="not_connected"):
             _resolve_device(hass, "device-instance")  # type: ignore[arg-type]
 
     def test_entry_never_set_up_is_skipped_not_crashed_on(self) -> None:
@@ -174,27 +176,27 @@ class TestTargets:
     async def test_no_target_raises(self) -> None:
         hass, _entry, _coordinator, client = _make_setup()
         call = FakeServiceCall(hass, DOMAIN, SERVICE_CLEAR, {ATTR_PRIORITY: 5})
-        with pytest.raises(ServiceValidationError, match="No HyperHDR instance targeted"):
+        with pytest.raises(ServiceValidationError, match="no_instance_targeted"):
             await resolve_targets(hass, call)  # type: ignore[arg-type]
         assert client.calls == []
 
     async def test_server_device_target_raises(self) -> None:
         hass, _entry, _coordinator, _client = _make_setup()
         call = FakeServiceCall(hass, DOMAIN, SERVICE_CLEAR, {"device_id": "device-server", ATTR_PRIORITY: 5})
-        with pytest.raises(ServiceValidationError, match="instance device"):
+        with pytest.raises(ServiceValidationError, match="server_device_target"):
             await _handle_clear(call)  # type: ignore[arg-type]
 
     async def test_server_entity_target_alone_resolves_nothing(self) -> None:
         hass, _entry, _coordinator, _client = _make_setup()
         call = FakeServiceCall(hass, DOMAIN, SERVICE_CLEAR, {"entity_id": "sensor.srv", ATTR_PRIORITY: 5})
-        with pytest.raises(ServiceValidationError, match="No HyperHDR instance targeted"):
+        with pytest.raises(ServiceValidationError, match="no_instance_targeted"):
             await _handle_clear(call)  # type: ignore[arg-type]
 
     async def test_stopped_instance_raises_not_connected(self) -> None:
         hass, _entry, coordinator, _client = _make_setup()
         coordinator.client = None
         call = FakeServiceCall(hass, DOMAIN, SERVICE_CLEAR, {"device_id": "device-instance", ATTR_PRIORITY: 5})
-        with pytest.raises(ServiceValidationError, match="not connected"):
+        with pytest.raises(ServiceValidationError, match="not_connected"):
             await _handle_clear(call)  # type: ignore[arg-type]
 
     async def test_area_target_skips_server_foreign_and_stopped_runs_running(self) -> None:
@@ -278,3 +280,20 @@ class TestSetupServices:
         )
 
         assert client.calls == [("async_set_color", ((10, 20, 30), 128, 0), {})]
+
+
+class TestRanges:
+    def test_priority_and_duration_bounds(self) -> None:
+        import voluptuous as vol
+
+        from custom_components.hyperhdr import services
+
+        base = {"rgb_color": [1, 2, 3]}
+        services._SCHEMA_SET_COLOR({**base, "priority": 253, "duration": 3600})
+        for bad in ({"priority": 0}, {"priority": 254}, {"duration": 3601}):
+            with pytest.raises(vol.Invalid):
+                services._SCHEMA_SET_COLOR({**base, **bad})
+        services._SCHEMA_CLEAR({"priority": -1})
+        for bad_priority in (0, 254, -2):
+            with pytest.raises(vol.Invalid):
+                services._SCHEMA_CLEAR({"priority": bad_priority})
