@@ -1,6 +1,6 @@
 [project]
 name = "ha-hyperhdr"
-version = "0.4.0"
+version = "0.4.1"
 description = "Home Assistant integration for HyperHDR ambient lighting"
 requires-python = ">=3.14.2"
 license = "MIT"

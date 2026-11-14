@@ -2,7 +2,7 @@
 
 Two scopes, matching the two coordinators in coordinator.py: a server-scoped
 base (one device per HyperHDR server) and an instance-scoped base (one
-device per HyperHDR instance, ``via_device``-linked to the server device).
+device per HyperHDR instance, ``via_device_id``-linked to the server device).
 """
 
 from __future__ import annotations
@@ -46,13 +46,13 @@ def server_device_info(coordinator: HyperHdrServerCoordinator, entry: HyperHdrCo
 
     Extracted (Phase 5+6, alongside ``instance_device_info``) so ``__init__.py``
     can explicitly register this device in the registry *before* forwarding
-    platform setup -- instance-scoped entities' ``via_device`` points at it,
+    platform setup -- instance-scoped entities' ``via_device_id`` points at it,
     and ``hass.config_entries.async_forward_entry_setups`` sets platforms up
     concurrently, so which platform's entities land first (and would
     otherwise be the one to incidentally create this device) is not
     deterministic. Observed live: without this, whichever of light/switch/
     select's entities got added before sensor.py's server-scoped ``version``
-    sensor logged a "referencing a non existing via_device" warning.
+    sensor logged a "referencing a non existing via_device_id" warning.
     """
     uid = server_uid(entry)
     sysinfo = coordinator.data.sysinfo if coordinator.data is not None else None
@@ -88,7 +88,7 @@ def instance_device_info(entry: HyperHdrConfigEntry, instance_id: int) -> Device
 
     return DeviceInfo(
         identifiers={(DOMAIN, f"{uid}_{instance_id}")},
-        via_device=(DOMAIN, uid),
+        via_device_id=entry.runtime_data.server_device_id,
         manufacturer=MANUFACTURER,
         name=name,
     )
@@ -178,7 +178,7 @@ class HyperHdrServerEntity(CoordinatorEntity[HyperHdrServerCoordinator]):
 
 class HyperHdrInstanceEntity(CoordinatorEntity[HyperHdrInstanceCoordinator]):
     """Base for instance-scoped entities (one device per HyperHDR instance,
-    linked to the server device via ``via_device``)."""
+    linked to the server device via ``via_device_id``)."""
 
     _attr_has_entity_name = True
 

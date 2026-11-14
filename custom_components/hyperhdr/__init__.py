@@ -266,15 +266,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: HyperHdrConfigEntry) -> 
         )
 
         # Explicitly register the server device before any entities exist --
-        # instance-scoped entities' via_device points at it, and
+        # instance-scoped entities' via_device_id points at it, and
         # async_forward_entry_setups sets platforms up concurrently, so nothing
         # otherwise guarantees a server-scoped entity (whose own device_info
         # would incidentally create it) gets added first. Idempotent -- a later
         # `HyperHdrServerEntity` (e.g. sensor.py's version sensor) resolves to
         # the same device via the same identifiers.
-        dr.async_get(hass).async_get_or_create(
+        server_device = dr.async_get(hass).async_get_or_create(
             config_entry_id=entry.entry_id, **server_device_info(server_coordinator, entry)
         )
+        entry.runtime_data.server_device_id = server_device.id
 
         # Cleanup for installs that predate FIRST_INSTANCE_ID handling: releases
         # <= 0.1.1 created a "Running" switch for instance 0, which HyperHDR
