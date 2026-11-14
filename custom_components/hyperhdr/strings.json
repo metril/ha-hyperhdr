@@ -267,10 +267,10 @@
   },
   "exceptions": {
     "device_not_found": {
-      "message": "Device '{device_id}' not found"
+      "message": "Device {device_id} not found"
     },
     "not_hyperhdr_device": {
-      "message": "Device '{device_id}' is not a HyperHDR device"
+      "message": "Device {device_id} is not a HyperHDR device"
     },
     "server_device_target": {
       "message": "This service must target a HyperHDR instance device, not the server device"
@@ -279,7 +279,7 @@
       "message": "HyperHDR instance {instance_id} is not connected"
     },
     "device_not_connected_instance": {
-      "message": "Device '{device_id}' is not a connected HyperHDR instance"
+      "message": "Device {device_id} is not a connected HyperHDR instance"
     },
     "instance_disconnected": {
       "message": "HyperHDR instance is not connected"
